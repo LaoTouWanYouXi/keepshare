@@ -1,6 +1,6 @@
 #!name=磁力拦截 · JavDB / 光鸭
 #!desc=JavDB 点击下载时展示操作页（复制 / 115 / PikPak / 光鸭），兼容 KeepShare 中转。需 MITM 信任证书。
-#!author=forward-user
+#!author=老头
 #!system=ios
 #!category=🧲 磁力
 
@@ -16,13 +16,13 @@ ENABLE_GUANGYA: 显示光鸭按钮, 1
 
 [Script]
 # JavDB 详情页：把 magnet: 下载链接改写为本地操作页
-JavDB-磁力改写 = type=http-response,pattern=^https?://(?:[\w-]+\.)?javdb\d*\.com/v/,script-path=javdb-magnet-rewrite.js,requires-body=1,max-size=5242880,argument=MAGNET_HOST={{{MAGNET_HOST}}}
+JavDB-磁力改写 = type=http-response,pattern=^https?://(?:[\w-]+\.)?javdb\d*\.com/v/,script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/javdb-magnet-rewrite.js,requires-body=1,max-size=5242880,argument=MAGNET_HOST={{{MAGNET_HOST}}}
 
 # KeepShare 中转页：直接替换为本地操作页
-磁力拦截-KeepShare = type=http-response,pattern=^https?://(?:[\w-]+\.)?keepshare\.(?:org|cc)/,script-path=magnet-intercept-response.js,requires-body=1,max-size=2097152,argument=MAGNET_HOST={{{MAGNET_HOST}}}&KEEPSHARE_TEMPLATE={{{KEEPSHARE_TEMPLATE}}}&ENABLE_115={{{ENABLE_115}}}&ENABLE_PIKPAK={{{ENABLE_PIKPAK}}}&ENABLE_GUANGYA={{{ENABLE_GUANGYA}}}
+磁力拦截-KeepShare = type=http-response,pattern=^https?://(?:[\w-]+\.)?keepshare\.(?:org|cc)/,script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/magnet-intercept-response.js,requires-body=1,max-size=2097152,argument=MAGNET_HOST={{{MAGNET_HOST}}}&KEEPSHARE_TEMPLATE={{{KEEPSHARE_TEMPLATE}}}&ENABLE_115={{{ENABLE_115}}}&ENABLE_PIKPAK={{{ENABLE_PIKPAK}}}&ENABLE_GUANGYA={{{ENABLE_GUANGYA}}}
 
 # 虚拟域名：操作页 / 光鸭 / 115 / PikPak
-磁力拦截-操作 = type=http-request,pattern=^https?://{{{MAGNET_HOST}}}/,script-path=magnet-intercept-request.js,timeout=60,argument=GUANGYA_REFRESH_TOKEN={{{GUANGYA_REFRESH_TOKEN}}}&MAGNET_HOST={{{MAGNET_HOST}}}&GUANGYA_PARENT_ID={{{GUANGYA_PARENT_ID}}}&KEEPSHARE_TEMPLATE={{{KEEPSHARE_TEMPLATE}}}&ENABLE_115={{{ENABLE_115}}}&ENABLE_PIKPAK={{{ENABLE_PIKPAK}}}&ENABLE_GUANGYA={{{ENABLE_GUANGYA}}}
+磁力拦截-操作 = type=http-request,pattern=^https?://{{{MAGNET_HOST}}}/,script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/magnet-intercept-request.js,timeout=60,argument=GUANGYA_REFRESH_TOKEN={{{GUANGYA_REFRESH_TOKEN}}}&MAGNET_HOST={{{MAGNET_HOST}}}&GUANGYA_PARENT_ID={{{GUANGYA_PARENT_ID}}}&KEEPSHARE_TEMPLATE={{{KEEPSHARE_TEMPLATE}}}&ENABLE_115={{{ENABLE_115}}}&ENABLE_PIKPAK={{{ENABLE_PIKPAK}}}&ENABLE_GUANGYA={{{ENABLE_GUANGYA}}}
 
 [MITM]
 hostname = %APPEND% {{{MAGNET_HOST}}}, javdb.com, javdb36.com, javdb37.com, keepshare.org, keepshare.cc

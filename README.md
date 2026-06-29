@@ -18,7 +18,19 @@
 
 ## 安装步骤
 
-1. 将 **4 个文件** 放在同一目录（iPhone 文件 App / iCloud）。
+### 在线订阅（推荐）
+
+Egern → **模块** → 从 URL 导入：
+
+```
+https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/Magnet-Guangya.sgmodule
+```
+
+脚本会从 GitHub 自动拉取，无需手动下载 `.js` 文件。
+
+### 本地安装
+
+1. 将 **5 个文件** 放在同一目录（iPhone 文件 App / iCloud）。
 2. Egern → **模块** → 导入 `Magnet-Guangya.sgmodule`。
 3. 填写模块参数：
    - **GUANGYA_REFRESH_TOKEN**：光鸭 `refresh_token`（一键导入光鸭必填）
