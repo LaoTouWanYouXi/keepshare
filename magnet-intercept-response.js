@@ -1,15 +1,15 @@
 /**
- * Egern / Surge — http-response
- * @version 1.1.0
+ * Egern / Surge — http-response（仅 KeepShare 磁力页）
+ * @version 1.1.1
  * @changelog
- *   1.1.0 - HTTP 链接；textarea 复制；版本响应头
- *   1.0.x - 初版 KeepShare 拦截
+ *   1.1.1 - 仅从 URL 取 magnet，不读 body；修复全站匹配导致 exec timeout
+ *   1.1.0 - HTTP 链接；textarea 复制
+ *   1.0.x - 初版
  *
  * JavDB 详情页见 javdb-magnet-rewrite.js
  */
 
-const SCRIPT_VERSION = "1.1.0";
-const MAGNET_RE = /magnet:\?[^\s"'<>\\]+/i;
+const SCRIPT_VERSION = "1.1.1";
 
 function decodeArg() {
   const raw = typeof $argument !== "undefined" ? String($argument || "") : "";
@@ -24,15 +24,19 @@ function decodeArg() {
   return out;
 }
 
-const DEFAULT_MAGNET_HOST = "egern-magnet.local";
-
 function resolveMagnetHost(cfg) {
   const candidates = [cfg && cfg.MAGNET_HOST, cfg && cfg.magnet_host];
   for (let i = 0; i < candidates.length; i++) {
     const v = String(candidates[i] || "").trim();
     if (v && v.indexOf("{{") === -1 && v.indexOf("}}") === -1) return v;
   }
-  return DEFAULT_MAGNET_HOST;
+  return "egern-magnet.local";
+}
+
+function resolveVal(v, fallback) {
+  const s = String(v || "").trim();
+  if (!s || s.indexOf("{{") !== -1) return fallback;
+  return s;
 }
 
 function htmlEscape(s) {
@@ -41,12 +45,6 @@ function htmlEscape(s) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
-}
-
-function resolveVal(v, fallback) {
-  const s = String(v || "").trim();
-  if (!s || s.indexOf("{{") !== -1) return fallback;
-  return s;
 }
 
 function buildMagnetPage(magnet, cfg) {
@@ -71,7 +69,7 @@ function buildMagnetPage(magnet, cfg) {
   }
 
   return "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">" +
-    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\">" +
+    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
     "<title>检测到磁力链接</title>" +
     "<style>*{box-sizing:border-box;margin:0;padding:0}" +
     "body{font-family:-apple-system,sans-serif;background:#0b0b0f;color:#f2f2f7;padding:24px 16px}" +
@@ -84,99 +82,31 @@ function buildMagnetPage(magnet, cfg) {
     "<div class=\"card\"><h1>检测到磁力链接</h1>" +
     "<p class=\"sub\">长按下方文本可复制磁力链接。</p>" +
     "<textarea readonly>" + htmlEscape(magnet) + "</textarea>" + buttons +
-    "<p class=\"hint\">由 Egern 本地脚本拦截</p></div></body></html>";
+    "<p class=\"hint\">Egern v" + SCRIPT_VERSION + "</p></div></body></html>";
 }
 
-function extractMagnetFromText(text) {
-  if (!text) return "";
-  const m = String(text).match(MAGNET_RE);
-  return m ? m[0] : "";
-}
-
-function extractMagnetFromUrl(url) {
-  if (!url) return "";
-  const u = String(url);
-  if (u.indexOf("magnet:?") === 0) return u.split("#")[0];
-  try {
-    const parsed = new URL(u);
-    for (const key of ["magnet", "url", "link", "m", "mag"]) {
-      const val = parsed.searchParams.get(key);
-      if (val && val.indexOf("magnet:") === 0) return val;
-      if (val) {
-        const inner = extractMagnetFromText(decodeURIComponent(val));
-        if (inner) return inner;
-      }
-    }
-    const q = decodeURIComponent(parsed.search || "");
-    const fromQ = extractMagnetFromText(q);
-    if (fromQ) return fromQ;
-    const path = decodeURIComponent(parsed.pathname || "");
-    const fromPath = extractMagnetFromText(path);
-    if (fromPath) return fromPath;
-    const slashMag = path.match(/\/(magnet:\?[^/]+)$/i);
-    if (slashMag) return slashMag[1];
-    const encMag = path.match(/\/(magnet%3A%3F[^/]+)/i);
-    if (encMag) return decodeURIComponent(encMag[1]);
-  } catch (e) {
-    return extractMagnetFromText(decodeURIComponent(u));
-  }
-  return "";
-}
-
+/** 只处理 URL 路径里带 magnet 的 KeepShare 链接 */
 function extractMagnetFromKeepShareUrl(url) {
   const u = String(url || "");
+  if (!/keepshare\.(?:org|cc)\/[^/?#]+\/magnet/i.test(u)) return "";
   const m = u.match(/keepshare\.(?:org|cc)\/[^/?#]+\/([^?#]+)/i);
-  if (!m) return extractMagnetFromUrl(u);
+  if (!m) return "";
   try {
     const part = decodeURIComponent(m[1]);
-    if (part.indexOf("magnet:") === 0) return part.split("#")[0];
-    return extractMagnetFromText(part);
+    if (part.indexOf("magnet:") === 0) return part.split("&")[0].split("#")[0];
+    const inner = part.match(/magnet:\?[^\s]+/i);
+    return inner ? inner[0] : "";
   } catch (e) {
-    return extractMagnetFromText(m[1]);
+    if (m[1].indexOf("magnet%3A") === 0 || m[1].indexOf("magnet:") === 0) {
+      try { return decodeURIComponent(m[1]).split("&")[0]; } catch (e2) { return ""; }
+    }
+    return "";
   }
-}
-
-function getHeader(headers, name) {
-  if (!headers) return "";
-  const lower = name.toLowerCase();
-  for (const k in headers) {
-    if (k.toLowerCase() === lower) return headers[k];
-  }
-  return "";
 }
 
 const cfg = decodeArg();
 const reqUrl = String($request.url || "");
-let magnet = "";
-
-if (/keepshare\.(?:org|cc)/i.test(reqUrl)) {
-  magnet = extractMagnetFromKeepShareUrl(reqUrl);
-}
-
-if (!magnet) {
-  magnet = extractMagnetFromUrl(reqUrl);
-}
-
-if (!magnet) {
-  const loc = getHeader($response.headers, "Location");
-  magnet = extractMagnetFromUrl(loc) || extractMagnetFromText(loc);
-}
-
-if (!magnet && $response.body) {
-  magnet = extractMagnetFromText($response.body);
-  if (!magnet) {
-    const hrefMatch = String($response.body).match(
-      /(?:location\.href|location\s*=)\s*['"](magnet:[^'"]+)['"]/i
-    );
-    if (hrefMatch) magnet = hrefMatch[1];
-  }
-  if (!magnet) {
-    const metaMatch = String($response.body).match(
-      /content\s*=\s*['"]\s*0\s*;\s*url=(magnet:[^'"]+)['"]/i
-    );
-    if (metaMatch) magnet = metaMatch[1];
-  }
-}
+const magnet = extractMagnetFromKeepShareUrl(reqUrl);
 
 if (!magnet) {
   $done({});

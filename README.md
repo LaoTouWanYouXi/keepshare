@@ -1,11 +1,11 @@
 # Egern 磁力拦截 · JavDB 优化版
 
-**当前版本：v1.1.0**
+**当前版本：v1.1.1**
 
 | 版本 | 变更 |
 |------|------|
-| v1.1.0 | 页内弹层；去除新标签跳转；修复 about:blank 卡死；脚本加 @version |
-| v1.0.x | 虚拟域名 HTTPS 改写（已废弃） |
+| v1.1.1 | KeepShare 脚本仅匹配 `/magnet` 路径，去掉 requires-body，修复 exec timeout |
+| v1.1.0 | 页内弹层；去除新标签跳转；修复 about:blank 卡死 |
 
 针对 **JavDB 详情页点击「下载」** 的场景优化，效果类似 KeepShare 操作页：
 
@@ -83,7 +83,7 @@ hostname = %APPEND% javdb567.com
 
 ## 常见问题
 
-- **打开 about:blank 新标签一直 loading**：v1.1.0 已修复。旧版把链接改写到虚拟域名且保留 `target=_blank` 导致。请更新脚本并**强制刷新** JavDB 详情页（Safari 长按刷新）。
+- **磁力拦截-KeepShare exec timeout**：v1.1.1 已修复。旧版匹配整个 keepshare 域名下所有请求（js/css/图片），每个都跑脚本导致超时。现仅匹配含 `/magnet` 的磁力页。v1.1.0 已修复。旧版把链接改写到虚拟域名且保留 `target=_blank` 导致。请更新脚本并**强制刷新** JavDB 详情页（Safari 长按刷新）。
 - **JavDB-磁力改写 日志为空**：v1.1.0 起详情页**必定**注入脚本，响应头含 `X-Egern-Magnet-Ver: 1.1.0`。若仍为空，检查 MITM 是否包含你用的 JavDB 镜像域名（不仅是 javdb.com）。
 - **egern-magnet.local 无法访问**：仅「光鸭一键导入」会用到；需 Egern 代理开启、MITM 证书信任、`[Host]` + `force-http-engine-hosts` 已合并进总配置。
 - **点击下载没反应 / 仍直接跳磁力**：确认 MITM 域名包含 JavDB、证书已信任。

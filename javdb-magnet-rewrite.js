@@ -1,9 +1,10 @@
 /**
  * JavDB 详情页 — http-response
- * @version 1.1.0
+ * @version 1.1.2
  * @changelog
- *   1.1.0 - 取消跳转虚拟域名；页内弹层；去除 target=_blank 防 about:blank 卡死
- *   1.0.x - 初版 href 改写（已废弃）
+ *   1.1.2 - 拦截 window.open / mousedown；MutationObserver 动态链接；更强 href 匹配
+ *   1.1.0 - 页内弹层；去除 target=_blank
+ *   1.0.x - 初版（已废弃）
  */
 
 function decodeArg() {
@@ -19,7 +20,7 @@ function decodeArg() {
   return out;
 }
 
-const SCRIPT_VERSION = "1.1.0";
+const SCRIPT_VERSION = "1.1.2";
 const DEFAULT_MAGNET_HOST = "egern-magnet.local";
 
 function resolveMagnetHost(cfg) {
@@ -49,8 +50,10 @@ const PANEL_CFG = {
 };
 
 function buildHtmlHeaders() {
-  const headers = { "Content-Type": "text/html; charset=utf-8", "X-Egern-Magnet-Ver": SCRIPT_VERSION };
-  return headers;
+  return {
+    "Content-Type": "text/html; charset=utf-8",
+    "X-Egern-Magnet-Ver": SCRIPT_VERSION
+  };
 }
 
 function attrEsc(s) {
@@ -60,21 +63,61 @@ function attrEsc(s) {
     .replace(/</g, "&lt;");
 }
 
-/** 去掉 target=_blank，改为页内 data 属性，避免新开 about:blank 标签 */
+function isMagnetHref(href) {
+  return /^magnet:/i.test(String(href || "").trim());
+}
+
+function magnetFromHref(href) {
+  return String(href || "").trim().split("&")[0].split("#")[0];
+}
+
+function stripNavAttrs(tagInner) {
+  return String(tagInner || "")
+    .replace(/\shref\s*=\s*(["'])[^"']*\1/gi, " ")
+    .replace(/\starget\s*=\s*(["'])[^"']*\1/gi, " ")
+    .replace(/\srel\s*=\s*(["'])[^"']*\1/gi, " ")
+    .replace(/\sonclick\s*=\s*(["'])[^"']*\1/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** 静态 HTML：所有 magnet / keepshare 磁力链接 neutralize */
 function neutralizeMagnetAnchors(html) {
-  return String(html).replace(
-    /<a\b([^>]*?)\shref=(["'])(magnet:\?[^"']+)\2([^>]*)>/gi,
-    function (_all, pre, _q, magnet, post) {
-      const attrs = (pre + " " + post)
-        .replace(/\starget\s*=\s*(["'])[^"']*\1/gi, " ")
-        .replace(/\srel\s*=\s*(["'])[^"']*\1/gi, " ")
-        .replace(/\sonclick\s*=\s*(["'])[^"']*\1/gi, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-      const m = magnet.split("&")[0];
-      return '<a ' + attrs + ' href="#" data-egern-magnet="' + attrEsc(m) + '">';
+  let body = String(html);
+
+  body = body.replace(/<a\b([^>]*)>/gi, function (full, inner) {
+    const hrefM = inner.match(/\shref\s*=\s*(["'])([^"']+)\1/i);
+    if (!hrefM) return full;
+    const href = hrefM[2];
+    if (isMagnetHref(href)) {
+      const attrs = stripNavAttrs(inner);
+      return '<a ' + attrs + ' href="#" data-egern-magnet="' + attrEsc(magnetFromHref(href)) + '">';
+    }
+    if (/keepshare\.(?:org|cc)/i.test(href) && /magnet/i.test(href)) {
+      const attrs = stripNavAttrs(inner);
+      let magnet = "";
+      try {
+        const part = decodeURIComponent(href.split("/").pop().split("?")[0]);
+        if (isMagnetHref(part)) magnet = magnetFromHref(part);
+      } catch (e) { /* ignore */ }
+      if (magnet) {
+        return '<a ' + attrs + ' href="#" data-egern-magnet="' + attrEsc(magnet) + '">';
+      }
+    }
+    if (/\starget\s*=\s*(["'])[^"']*\1/i.test(inner) && isMagnetHref(hrefM[2])) {
+      return full;
+    }
+    return full;
+  });
+
+  body = body.replace(
+    /(<(?:div|section)[^>]*id=(["'])magnets-content\2[^>]*>[\s\S]*?)<\/(?:div|section)>/gi,
+    function (block) {
+      return block.replace(/\starget\s*=\s*(["'])[^"']*\1/gi, "");
     }
   );
+
+  return body;
 }
 
 function buildInjectScript() {
@@ -82,12 +125,16 @@ function buildInjectScript() {
   return (
     "<script data-egern-magnet-intercept data-ver=\"" + SCRIPT_VERSION + "\">" +
     "(function(){" +
-    "if(window.__egernMagnetPanelInit)return;" +
-    "window.__egernMagnetPanelInit=1;" +
+    "var V='" + SCRIPT_VERSION + "';" +
+    "if(window.__egernMagnetVer===V)return;" +
+    "window.__egernMagnetVer=V;" +
     "var C=" + cfgJson + ";" +
-    "function ksUrl(m,a){if(!C.ks)return'';var b=C.ks;return b+(b.charAt(b.length-1)==='/'?'':'/')+encodeURIComponent(m)+'?action='+a;}" +
-    "function mkBtn(href,text,bg,fg){var a=document.createElement('a');a.href=href;a.textContent=text;" +
-    "a.style.cssText='display:block;box-sizing:border-box;width:100%;text-align:center;padding:14px 12px;margin-bottom:10px;border-radius:12px;font-size:16px;font-weight:600;text-decoration:none;background:'+bg+';color:'+fg;return a;}" +
+    "function isMag(u){return/^magnet:/i.test(String(u||''));}" +
+    "function norm(u){return String(u||'').trim().split('&')[0].split('#')[0];}" +
+    "function ksUrl(m,a){if(!C.ks)return'';var b=C.ks;return b+(b.slice(-1)==='/'?'':'/')+encodeURIComponent(m)+'?action='+a;}" +
+    "function mkBtn(href,text,bg,fg){var b=document.createElement('button');b.type='button';b.textContent=text;" +
+    "b.style.cssText='display:block;box-sizing:border-box;width:100%;text-align:center;padding:14px 12px;margin-bottom:10px;border-radius:12px;font-size:16px;font-weight:600;border:0;cursor:pointer;background:'+bg+';color:'+fg+';" +
+    "b.addEventListener('click',function(ev){ev.preventDefault();location.href=href;});return b;}" +
     "function showPanel(m){" +
     "var old=document.getElementById('egern-magnet-panel');if(old)old.remove();" +
     "var w=document.createElement('div');w.id='egern-magnet-panel';" +
@@ -102,32 +149,45 @@ function buildInjectScript() {
     "if(C.s115){bs.appendChild(mkBtn(ksUrl(m,'115')||('https://115.com/web/lixian/?ct=offline&ac=add&url='+encodeURIComponent(m)),'115 网盘 · 离线下载','#22c55e','#052e16'));}" +
     "if(C.spk){bs.appendChild(mkBtn(ksUrl(m,'pikpak')||('https://mypikpak.com/drive/all?action=add_magnet&url='+encodeURIComponent(m)),'PikPak · 一键导入','#3b82f6','#fff'));}" +
     "if(C.sgy){bs.appendChild(mkBtn(C.base+'/guangya?magnet='+encodeURIComponent(m),'光鸭云盘 · 一键导入','#16a34a','#fff'));}" +
-    "var cl=document.createElement('a');cl.href='#';cl.textContent='关闭';cl.style.cssText='display:block;text-align:center;margin-top:12px;color:#71717a;font-size:13px;text-decoration:none';" +
-    "cl.onclick=function(ev){ev.preventDefault();w.remove();};" +
+    "var cl=document.createElement('button');cl.type='button';cl.textContent='关闭';" +
+    "cl.style.cssText='display:block;width:100%;text-align:center;margin-top:12px;color:#71717a;font-size:13px;background:0;border:0';" +
+    "cl.onclick=function(){w.remove();};" +
     "c.appendChild(h);c.appendChild(p);c.appendChild(ta);c.appendChild(bs);c.appendChild(cl);w.appendChild(c);" +
-    "w.addEventListener('click',function(ev){if(ev.target===w)w.remove();});" +
-    "document.body.appendChild(w);}" +
-    "function pickMagnet(el){return el.getAttribute('data-egern-magnet')||(el.getAttribute('href')||'').split('&')[0];}" +
-    "document.addEventListener('click',function(e){" +
-    "var a=e.target.closest('a[data-egern-magnet],a[href^=\"magnet:?\"]');if(!a)return;" +
-    "e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();" +
-    "var m=pickMagnet(a);if(m&&m.indexOf('magnet:')===0)showPanel(m);return false;" +
-    "},true);" +
-    "document.addEventListener('auxclick',function(e){" +
-    "var a=e.target.closest('a[data-egern-magnet],a[href^=\"magnet:?\"]');if(!a)return;" +
-    "e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();return false;" +
-    "},true);" +
+    "w.onclick=function(ev){if(ev.target===w)w.remove();};document.body.appendChild(w);}" +
+    "function pickMag(el){return el.getAttribute('data-egern-magnet')||el.getAttribute('href')||'';}" +
+    "function fixAnchor(a){if(!a||a.hasAttribute('data-egern-fixed'))return;" +
+    "var h=a.getAttribute('href')||'';if(!isMag(h))return;" +
+    "a.setAttribute('data-egern-magnet',norm(h));a.setAttribute('href','#');a.removeAttribute('target');a.removeAttribute('rel');a.setAttribute('data-egern-fixed','1');}" +
+    "function scan(root){var nodes=(root||document).querySelectorAll('a[href^=\"magnet:\"],a[href^=\"magnet:?\"],a[href^=\"MAGNET:\"]');" +
+    "for(var i=0;i<nodes.length;i++)fixAnchor(nodes[i]);}" +
+    "function handleLink(el,e){var m=norm(pickMag(el));if(!isMag(m))return false;" +
+    "if(e){e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();}" +
+    "showPanel(m);return true;}" +
+    "function findLink(t){return t&&t.closest?t.closest('a[data-egern-magnet],a[href^=\"magnet:\"],a[href^=\"magnet:?\"],a[href^=\"MAGNET:\"]'):null;}" +
+    "['mousedown','touchstart','click','auxclick'].forEach(function(evt){" +
+    "document.addEventListener(evt,function(e){var a=findLink(e.target);if(!a)return;" +
+    "if(evt==='mousedown'||evt==='touchstart'){e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();return;}" +
+    "handleLink(a,e);},true);});" +
+    "var _open=window.open;" +
+    "window.open=function(u,t,f){if(isMag(u)){showPanel(norm(u));return null;}" +
+    "if(/keepshare\\.(org|cc)/i.test(String(u||''))&&/magnet/i.test(String(u||''))){try{var p=decodeURIComponent(String(u).split('/').pop().split('?')[0]);if(isMag(p)){showPanel(norm(p));return null;}}catch(x){}}" +
+    "return _open.apply(window,arguments);};" +
+    "scan(document);" +
+    "var box=document.getElementById('magnets-content');" +
+    "if(box&&window.MutationObserver){new MutationObserver(function(){scan(box);}).observe(box,{childList:true,subtree:true});}" +
+    "setInterval(function(){scan(document.getElementById('magnets-content')||document);},1500);" +
     "})();</script>"
   );
 }
 
 function injectPanelScript(html) {
-  if (String(html).indexOf("data-egern-magnet-intercept") !== -1) {
-    return String(html).replace(/data-ver=\"[^\"]*\"/, "data-ver=\"" + SCRIPT_VERSION + "\"");
-  }
+  const s = String(html);
   const script = buildInjectScript();
-  if (/<\/body>/i.test(html)) return String(html).replace(/<\/body>/i, script + "</body>");
-  return String(html) + script;
+  if (s.indexOf("data-egern-magnet-intercept") !== -1) {
+    return s.replace(/<script data-egern-magnet-intercept[\s\S]*?<\/script>/i, script);
+  }
+  if (/<\/body>/i.test(s)) return s.replace(/<\/body>/i, script + "</body>");
+  return s + script;
 }
 
 if (!$response.body || $response.status !== 200) {
@@ -135,12 +195,7 @@ if (!$response.body || $response.status !== 200) {
 } else if (!/\/v\/[A-Za-z0-9]+/.test($request.url)) {
   $done({});
 } else {
-  const original = String($response.body);
-  let body = neutralizeMagnetAnchors(original);
+  let body = neutralizeMagnetAnchors(String($response.body));
   body = injectPanelScript(body);
-  $done({
-    status: 200,
-    headers: buildHtmlHeaders(),
-    body: body
-  });
+  $done({ status: 200, headers: buildHtmlHeaders(), body: body });
 }
