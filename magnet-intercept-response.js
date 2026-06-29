@@ -1,6 +1,6 @@
 /**
  * Egern / Surge — http-response（仅 KeepShare 磁力页）
- * @version 1.1.1
+ * @version 1.1.4
  * @changelog
  *   1.1.1 - 仅从 URL 取 magnet，不读 body；修复全站匹配导致 exec timeout
  *   1.1.0 - HTTP 链接；textarea 复制
@@ -9,7 +9,7 @@
  * JavDB 详情页见 javdb-magnet-rewrite.js
  */
 
-const SCRIPT_VERSION = "1.1.1";
+const SCRIPT_VERSION = "1.1.4";
 
 function decodeArg() {
   const raw = typeof $argument !== "undefined" ? String($argument || "") : "";

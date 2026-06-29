@@ -1,12 +1,9 @@
 /**
  * JavDB 详情页 — http-response
- * @version 1.1.3
+ * @version 1.1.4
  * @changelog
- *   1.1.3 - 不再改 href 为 #（修复点击滚到顶部）；仅去 target=_blank + 点击拦截弹层
- *   1.1.2 - window.open 拦截（mousedown 过激进，已回退）
- *   1.1.0 - 页内弹层
- *
- * KeepShare 模板参数仍用于弹层内 115/PikPak 按钮，与「磁力拦截-KeepShare」脚本无关。
+ *   1.1.4 - 拦截 keepshare.org/cc 下载链接；115/PikPak 走本地 /115 /pikpak（去掉 ?action= 防 301）
+ *   1.1.3 - 保留 magnet: href，页内弹层
  */
 
 function decodeArg() {
@@ -22,7 +19,7 @@ function decodeArg() {
   return out;
 }
 
-const SCRIPT_VERSION = "1.1.3";
+const SCRIPT_VERSION = "1.1.4";
 
 function resolveMagnetHost(cfg) {
   const candidates = [cfg && cfg.MAGNET_HOST, cfg && cfg.magnet_host];
@@ -43,7 +40,6 @@ const cfg = decodeArg();
 const PANEL_CFG = {
   v: SCRIPT_VERSION,
   base: "http://" + resolveMagnetHost(cfg),
-  ks: resolveVal(cfg.KEEPSHARE_TEMPLATE, ""),
   s115: resolveVal(cfg.ENABLE_115, "1") !== "0",
   spk: resolveVal(cfg.ENABLE_PIKPAK, "1") !== "0",
   sgy: resolveVal(cfg.ENABLE_GUANGYA, "1") !== "0"
@@ -56,9 +52,13 @@ function buildHtmlHeaders() {
   };
 }
 
-/** 只去掉 magnet 链接的 target=_blank，保留原始 magnet: href */
-function stripMagnetBlankTarget(html) {
-  return String(html).replace(/<a\b([^>]*\shref=(["'])magnet:[^"']+\2[^>]*)>/gi, function (_all, inner) {
+/** magnet 与 keepshare 磁力链接：去掉 target=_blank */
+function stripDownloadBlankTarget(html) {
+  return String(html).replace(/<a\b([^>]*\shref=(["'])([^"']+)\2[^>]*)>/gi, function (_all, inner, _q, href) {
+    const h = String(href || "");
+    const isMag = /^magnet:/i.test(h);
+    const isKs = /keepshare\.(?:org|cc)/i.test(h) && /magnet/i.test(h);
+    if (!isMag && !isKs) return _all;
     const cleaned = inner
       .replace(/\starget\s*=\s*(["'])[^"']*\1/gi, " ")
       .replace(/\srel\s*=\s*(["'])[^"']*\1/gi, " ")
@@ -79,7 +79,9 @@ function buildInjectScript() {
     "var C=" + cfgJson + ";" +
     "function isMag(u){return/^magnet:/i.test(String(u||''));}" +
     "function norm(u){return String(u||'').trim().split('&')[0].split('#')[0];}" +
-    "function ksUrl(m,a){if(!C.ks)return'';var b=C.ks;return b+(b.slice(-1)==='/'?'':'/')+encodeURIComponent(m)+'?action='+a;}" +
+    "function isKsMag(u){return/keepshare\\.(org|cc)/i.test(String(u||''))&&/magnet/i.test(String(u||''));}" +
+    "function magnetFromKs(u){try{var p=String(u).split('?')[0].split('/');var last=decodeURIComponent(p[p.length-1]);if(isMag(last))return norm(last);}catch(x){}return'';}" +
+    "function magnetFromLink(h){if(isMag(h))return norm(h);if(isKsMag(h))return magnetFromKs(h);return'';}" +
     "function go(href){location.assign(href);}" +
     "function mkBtn(href,text,bg,fg){var b=document.createElement('button');b.type='button';b.textContent=text;" +
     "b.style.cssText='display:block;box-sizing:border-box;width:100%;padding:14px 12px;margin-bottom:10px;border-radius:12px;font-size:16px;font-weight:600;border:0;cursor:pointer;background:'+bg+';color:'+fg+';" +
@@ -95,21 +97,23 @@ function buildInjectScript() {
     "var ta=document.createElement('textarea');ta.readOnly=true;ta.value=m;" +
     "ta.style.cssText='width:100%;height:88px;background:#0f0f14;color:#d4d4d8;border:1px solid #30303a;border-radius:10px;padding:10px;font-size:12px;word-break:break-all;box-sizing:border-box';" +
     "var bs=document.createElement('div');bs.style.marginTop='12px';" +
-    "if(C.s115){bs.appendChild(mkBtn(ksUrl(m,'115')||('https://115.com/web/lixian/?ct=offline&ac=add&url='+encodeURIComponent(m)),'115 网盘 · 离线下载','#22c55e','#052e16'));}" +
-    "if(C.spk){bs.appendChild(mkBtn(ksUrl(m,'pikpak')||('https://mypikpak.com/drive/all?action=add_magnet&url='+encodeURIComponent(m)),'PikPak · 一键导入','#3b82f6','#fff'));}" +
-    "if(C.sgy){bs.appendChild(mkBtn(C.base+'/guangya?magnet='+encodeURIComponent(m),'光鸭云盘 · 一键导入','#16a34a','#fff'));}" +
+    "var enc=encodeURIComponent(m);" +
+    "if(C.s115){bs.appendChild(mkBtn(C.base+'/115?magnet='+enc,'115 网盘 · 离线下载','#22c55e','#052e16'));}" +
+    "if(C.spk){bs.appendChild(mkBtn(C.base+'/pikpak?magnet='+enc,'PikPak · 一键导入','#3b82f6','#fff'));}" +
+    "if(C.sgy){bs.appendChild(mkBtn(C.base+'/guangya?magnet='+enc,'光鸭云盘 · 一键导入','#16a34a','#fff'));}" +
     "var cl=document.createElement('button');cl.type='button';cl.textContent='关闭';" +
     "cl.style.cssText='display:block;width:100%;margin-top:12px;color:#71717a;font-size:13px;background:0;border:0';" +
     "cl.onclick=function(){w.remove();};" +
     "c.appendChild(ta);c.appendChild(bs);c.appendChild(cl);w.appendChild(c);" +
     "w.onclick=function(ev){if(ev.target===w)w.remove();};document.body.appendChild(w);}" +
-    "function onMagnetClick(e){var a=e.target.closest('a[href^=\"magnet:\"],a[href^=\"magnet:?\"],a[href^=\"MAGNET:\"]');" +
-    "if(!a)return;e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();showPanel(norm(a.getAttribute('href')));return false;}" +
-    "document.addEventListener('click',onMagnetClick,true);" +
+    "function onDownloadClick(e){var a=e.target.closest('a[href]');if(!a)return;" +
+    "var h=a.getAttribute('href')||'';var m=magnetFromLink(h);if(!m)return;" +
+    "e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();showPanel(m);return false;}" +
+    "document.addEventListener('click',onDownloadClick,true);" +
     "var _open=window.open;" +
-    "window.open=function(u){if(isMag(u)){showPanel(norm(u));return null;}return _open.apply(window,arguments);};" +
-    "function fixTargets(root){var list=(root||document).querySelectorAll('a[href^=\"magnet:\"],a[href^=\"magnet:?\"],a[href^=\"MAGNET:\"]');" +
-    "for(var i=0;i<list.length;i++){list[i].removeAttribute('target');list[i].removeAttribute('rel');}}" +
+    "window.open=function(u){var m=magnetFromLink(String(u||''));if(m){showPanel(m);return null;}return _open.apply(window,arguments);};" +
+    "function fixTargets(root){var list=(root||document).querySelectorAll('a[href]');" +
+    "for(var i=0;i<list.length;i++){var h=list[i].getAttribute('href')||'';if(isMag(h)||isKsMag(h)){list[i].removeAttribute('target');list[i].removeAttribute('rel');}}}" +
     "fixTargets(document);" +
     "var box=document.getElementById('magnets-content');" +
     "if(box&&window.MutationObserver){new MutationObserver(function(){fixTargets(box);}).observe(box,{childList:true,subtree:true});}" +
@@ -132,7 +136,7 @@ if (!$response.body || $response.status !== 200) {
 } else if (!/\/v\/[A-Za-z0-9]+/.test($request.url)) {
   $done({});
 } else {
-  let body = stripMagnetBlankTarget(String($response.body));
+  let body = stripDownloadBlankTarget(String($response.body));
   body = injectPanelScript(body);
   $done({ status: 200, headers: buildHtmlHeaders(), body: body });
 }

@@ -1,9 +1,9 @@
 /**
  * Egern / Surge — http-request
- * @version 1.1.0
+ * @version 1.1.4
  * @changelog
- *   1.1.0 - 双格式 $done；HTTP 虚拟域名；去掉 inline onclick
- *   1.0.x - 初版
+ *   1.1.4 - KeepShare 跳转去掉 ?action=，使用模板域名（防 301）
+ *   1.1.0 - 双格式 $done；HTTP 虚拟域名
  */
 
 const CLIENT_ID = "aMe-8VSlkrbQXpUR";
@@ -13,7 +13,7 @@ const SITE_ORIGIN = "https://www.guangyapan.com";
 const UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
 
-const SCRIPT_VERSION = "1.1.0";
+const SCRIPT_VERSION = "1.1.4";
 
 function decodeArg() {
   const raw = typeof $argument !== "undefined" ? String($argument || "") : "";
@@ -229,6 +229,13 @@ function parseKeepShareTemplate(cfg) {
   }
 }
 
+/** 标准 KeepShare 分享链接：{模板}{urlencode(magnet)}，不要加 ?action= */
+function keepshareMagnetUrl(cfg, magnet) {
+  const ks = parseKeepShareTemplate(cfg);
+  if (!ks) return "";
+  return ks.base + encodeURIComponent(magnet);
+}
+
 function parseRequest() {
   const url = String($request.url || "");
   const u = new URL(url);
@@ -257,8 +264,8 @@ if (req.host !== host) {
   if (!magnet || magnet.indexOf("magnet:") !== 0) {
     respondLocal(400, {}, htmlPage("参数错误", "<h1>缺少有效磁力链接</h1>"));
   } else {
-    const ks = parseKeepShareTemplate(cfg);
-    const target = ks ? ks.base + encodeURIComponent(magnet) + "?action=115" :
+    const ks = keepshareMagnetUrl(cfg, magnet);
+    const target = ks ||
       "https://115.com/web/lixian/?ct=offline&ac=add&url=" + encodeURIComponent(magnet);
     respondRedirect(target);
   }
@@ -267,10 +274,9 @@ if (req.host !== host) {
   if (!magnet || magnet.indexOf("magnet:") !== 0) {
     respondLocal(400, {}, htmlPage("参数错误", "<h1>缺少有效磁力链接</h1>"));
   } else {
-    const ks = parseKeepShareTemplate(cfg);
-    const target = ks ? ks.base + encodeURIComponent(magnet) + "?action=pikpak" :
-      "https://mypikpak.com/drive/all?action=add_magnet&url=" + encodeURIComponent(magnet);
-    respondRedirect(target);
+    respondRedirect(
+      "https://mypikpak.com/drive/all?action=add_magnet&url=" + encodeURIComponent(magnet)
+    );
   }
 } else if (req.path === "/guangya") {
   const magnet = req.magnet;
