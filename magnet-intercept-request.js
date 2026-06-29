@@ -5,6 +5,8 @@
  *   /guangya — 光鸭云盘云下载
  *   /115     — 115 离线下载（KeepShare API 或 115 Web）
  *   /pikpak  — PikPak 导入（KeepShare API 或 PikPak Web）
+ *
+ * 注意：http-request 返回本地页面必须用 $done({ response: { ... } })
  */
 
 const CLIENT_ID = "aMe-8VSlkrbQXpUR";
@@ -50,6 +52,29 @@ function htmlEscape(s) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+/** http-request 本地响应（Surge / Egern 标准格式） */
+function respondLocal(status, headers, body) {
+  $done({
+    response: {
+      status: status || 200,
+      headers: Object.assign(
+        { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+        headers || {}
+      ),
+      body: body || ""
+    }
+  });
+}
+
+function respondRedirect(location) {
+  $done({
+    response: {
+      status: 302,
+      headers: { Location: location, "Cache-Control": "no-store" }
+    }
+  });
 }
 
 function buildMagnetPage(magnet, cfg) {
@@ -193,15 +218,11 @@ async function createGuangyaTask(token, did, magnet, parentId) {
 }
 
 function parseKeepShareTemplate(cfg) {
-  const raw = String(
-    cfg.KEEPSHARE_TEMPLATE || cfg.KEEPSHARE_SHARE_ID || ""
-  ).trim();
-  if (!raw) return null;
-
+  const raw = String(cfg.KEEPSHARE_TEMPLATE || cfg.KEEPSHARE_SHARE_ID || "").trim();
+  if (!raw || raw.indexOf("{{") !== -1) return null;
   if (!raw.includes("/") && !raw.includes(".")) {
     return { base: "https://keepshare.cc/" + raw + "/" };
   }
-
   try {
     const normalized = raw.endsWith("/") ? raw : raw + "/";
     const u = new URL(normalized);
@@ -211,16 +232,10 @@ function parseKeepShareTemplate(cfg) {
   }
 }
 
-function keepshareMagnetUrl(cfg, magnet) {
+function keepshareActionUrl(cfg, magnet, action) {
   const ks = parseKeepShareTemplate(cfg);
   if (!ks) return "";
-  return ks.base + encodeURIComponent(magnet);
-}
-
-function keepshareActionUrl(cfg, magnet, action) {
-  const url = keepshareMagnetUrl(cfg, magnet);
-  if (!url) return "";
-  return url + "?action=" + action;
+  return ks.base + encodeURIComponent(magnet) + "?action=" + action;
 }
 
 function parseRequest() {
@@ -242,67 +257,43 @@ if (req.host !== host) {
 } else if (req.path === "/page") {
   const magnet = req.magnet;
   if (!magnet || magnet.indexOf("magnet:") !== 0) {
-    $done({
-      status: 400,
-      headers: { "Content-Type": "text/html; charset=utf-8" },
-      body: htmlPage("参数错误", "<h1>缺少有效磁力链接</h1>")
-    });
+    respondLocal(400, {}, htmlPage("参数错误", "<h1>缺少有效磁力链接</h1>"));
   } else {
-    $done({
-      status: 200,
-      headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
-      body: buildMagnetPage(magnet, cfg)
-    });
+    respondLocal(200, {}, buildMagnetPage(magnet, cfg));
   }
 } else if (req.path === "/115") {
   const magnet = req.magnet;
   if (!magnet || magnet.indexOf("magnet:") !== 0) {
-    $done({ status: 400, headers: { "Content-Type": "text/html; charset=utf-8" },
-      body: htmlPage("参数错误", "<h1>缺少有效磁力链接</h1>") });
+    respondLocal(400, {}, htmlPage("参数错误", "<h1>缺少有效磁力链接</h1>"));
   } else {
     const ks = keepshareActionUrl(cfg, magnet, "115");
     const target = ks ||
       "https://115.com/web/lixian/?ct=offline&ac=add&url=" + encodeURIComponent(magnet);
-    $done({
-      status: 302,
-      headers: { Location: target, "Cache-Control": "no-store" }
-    });
+    respondRedirect(target);
   }
 } else if (req.path === "/pikpak") {
   const magnet = req.magnet;
   if (!magnet || magnet.indexOf("magnet:") !== 0) {
-    $done({ status: 400, headers: { "Content-Type": "text/html; charset=utf-8" },
-      body: htmlPage("参数错误", "<h1>缺少有效磁力链接</h1>") });
+    respondLocal(400, {}, htmlPage("参数错误", "<h1>缺少有效磁力链接</h1>"));
   } else {
     const ks = keepshareActionUrl(cfg, magnet, "pikpak");
     const target = ks ||
       "https://mypikpak.com/drive/all?action=add_magnet&url=" + encodeURIComponent(magnet);
-    $done({
-      status: 302,
-      headers: { Location: target, "Cache-Control": "no-store" }
-    });
+    respondRedirect(target);
   }
 } else if (req.path === "/guangya") {
   (async function () {
     const magnet = req.magnet;
     if (!magnet || magnet.indexOf("magnet:") !== 0) {
-      $done({
-        status: 400,
-        headers: { "Content-Type": "text/html; charset=utf-8" },
-        body: htmlPage("参数错误", "<h1>缺少有效磁力链接</h1><p>请从拦截页重新进入。</p>")
-      });
+      respondLocal(400, {}, htmlPage("参数错误", "<h1>缺少有效磁力链接</h1><p>请从拦截页重新进入。</p>"));
       return;
     }
 
     const refresh = cfg.GUANGYA_REFRESH_TOKEN || "";
-    if (!refresh) {
-      $done({
-        status: 200,
-        headers: { "Content-Type": "text/html; charset=utf-8" },
-        body: htmlPage("未配置 Token", "<h1>未配置光鸭 Refresh Token</h1>" +
-          "<p>请在 Egern 模块参数中设置 <code>GUANGYA_REFRESH_TOKEN</code>，然后重试。</p>" +
-          "<p style=\"word-break:break-all;font-size:12px;opacity:.8\">" + htmlEscape(magnet) + "</p>")
-      });
+    if (!refresh || refresh.indexOf("{{") !== -1) {
+      respondLocal(200, {}, htmlPage("未配置 Token", "<h1>未配置光鸭 Refresh Token</h1>" +
+        "<p>请在 Egern 模块参数中设置 <code>GUANGYA_REFRESH_TOKEN</code>，然后重试。</p>" +
+        "<p style=\"word-break:break-all;font-size:12px;opacity:.8\">" + htmlEscape(magnet) + "</p>"));
       return;
     }
 
@@ -314,30 +305,18 @@ if (req.host !== host) {
       const msg = (result && result.msg) || JSON.stringify(result);
 
       if (ok) {
-        $done({
-          status: 200,
-          headers: { "Content-Type": "text/html; charset=utf-8" },
-          body: htmlPage("导入成功", "<h1>已提交光鸭云下载</h1>" +
-            "<p>任务已创建，请到光鸭云盘 App / 网页的「云下载」查看进度。</p>" +
-            "<p style=\"font-size:12px;opacity:.75;word-break:break-all\">" + htmlEscape(magnet) + "</p>" +
-            "<a class=\"btn\" href=\"javascript:history.back()\">返回</a>")
-        });
+        respondLocal(200, {}, htmlPage("导入成功", "<h1>已提交光鸭云下载</h1>" +
+          "<p>任务已创建，请到光鸭云盘 App / 网页的「云下载」查看进度。</p>" +
+          "<p style=\"font-size:12px;opacity:.75;word-break:break-all\">" + htmlEscape(magnet) + "</p>" +
+          "<a class=\"btn\" href=\"javascript:history.back()\">返回</a>"));
       } else {
-        $done({
-          status: 200,
-          headers: { "Content-Type": "text/html; charset=utf-8" },
-          body: htmlPage("导入失败", "<h1>光鸭返回异常</h1><p>" + htmlEscape(msg) + "</p>" +
-            "<p style=\"font-size:12px;word-break:break-all\">" + htmlEscape(magnet) + "</p>" +
-            "<a class=\"btn\" href=\"javascript:history.back()\">返回</a>")
-        });
+        respondLocal(200, {}, htmlPage("导入失败", "<h1>光鸭返回异常</h1><p>" + htmlEscape(msg) + "</p>" +
+          "<p style=\"font-size:12px;word-break:break-all\">" + htmlEscape(magnet) + "</p>" +
+          "<a class=\"btn\" href=\"javascript:history.back()\">返回</a>"));
       }
     } catch (e) {
-      $done({
-        status: 200,
-        headers: { "Content-Type": "text/html; charset=utf-8" },
-        body: htmlPage("请求失败", "<h1>调用光鸭 API 失败</h1><p>" + htmlEscape(e.message || e) + "</p>" +
-          "<a class=\"btn\" href=\"javascript:history.back()\">返回</a>")
-      });
+      respondLocal(200, {}, htmlPage("请求失败", "<h1>调用光鸭 API 失败</h1><p>" + htmlEscape(e.message || e) + "</p>" +
+        "<a class=\"btn\" href=\"javascript:history.back()\">返回</a>"));
     }
   })();
 } else {

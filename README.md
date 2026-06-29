@@ -76,10 +76,16 @@ hostname = %APPEND% javdb567.com
 
 ## 常见问题
 
-- **点击下载没反应 / 仍直接跳磁力**：确认 MITM 已信任证书，且模块已启用；JavDB 域名是否在 MITM 列表中。
-- **操作页空白**：检查 `.js` 与 `.sgmodule` 是否同目录。
+- **egern-magnet.local 无法访问 / 网页打不开**：
+  1. 这是**虚拟域名**，不是真实网站，必须 **Egern 代理已开启** 且模块已启用
+  2. 模块需包含 `[Host]` 和 `[General] force-http-engine-hosts`（新版已内置）
+  3. MITM 证书必须 **完全信任**
+  4. 更新模块后 **重新打开 JavDB 详情页**（旧页面 HTML 可能仍是错误链接）
+  5. iOS 对 `.local` 域名有时异常；若仍失败，把模块参数 **MAGNET_HOST** 改为 `egern-magnet.test` 并同步改 MITM / Host（或等下一版默认改用 `.test`）
+- **点击下载没反应 / 仍直接跳磁力**：确认 MITM 域名包含 JavDB、证书已信任。
+- **操作页空白**：检查 GitHub Raw 脚本能否访问；Egern 日志是否有脚本报错。
 - **光鸭导入失败「空间不足」**：光鸭云盘空间已满，需清理后再试。
-- **script-path 找不到脚本**：改用绝对路径，或确保四个文件在同一文件夹。
+- **script-path 找不到脚本**：确认 GitHub 仓库文件已 push，Raw 地址可打开。
 
 ## 与初版的区别
 
