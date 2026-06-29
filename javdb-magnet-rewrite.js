@@ -18,8 +18,22 @@ function decodeArg() {
   return out;
 }
 
+const DEFAULT_MAGNET_HOST = "egern-magnet.local";
+
+function resolveMagnetHost(cfg) {
+  const candidates = [
+    cfg && cfg.MAGNET_HOST,
+    cfg && cfg.magnet_host
+  ];
+  for (let i = 0; i < candidates.length; i++) {
+    const v = String(candidates[i] || "").trim();
+    if (v && v.indexOf("{{") === -1 && v.indexOf("}}") === -1) return v;
+  }
+  return DEFAULT_MAGNET_HOST;
+}
+
 const cfg = decodeArg();
-const MAGNET_HOST = cfg.MAGNET_HOST || "egern-magnet.local";
+const MAGNET_HOST = resolveMagnetHost(cfg);
 
 function toInterceptPage(magnet) {
   return "https://" + MAGNET_HOST + "/page?magnet=" + encodeURIComponent(magnet);
