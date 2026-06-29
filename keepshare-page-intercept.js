@@ -1,8 +1,9 @@
 /**
  * Egern / Surge — http-request
  * KeepShare 磁力页：请求发出前拦截；按钮走同域 ?egern= 动作（避免 egern-magnet.local 无效）
- * @version 1.2.1
+ * @version 1.2.2
  * @changelog
+ *   1.2.2 - 修复 Egern $argument 为对象 / 全局 $env 读不到 token
  *   1.2.1 - 按钮改 keepshare 同域 ?egern=；内联光鸭 API；成功后跳转打开 App
  *   1.2.0 - KeepShare 请求级拦截
  */
@@ -15,19 +16,88 @@ const GUANGYA_APP_URL = "https://app.guangyapan.com/pan";
 const UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
 
-const SCRIPT_VERSION = "1.2.1";
+const SCRIPT_VERSION = "1.2.2";
 
-function decodeArg() {
-  const raw = typeof $argument !== "undefined" ? String($argument || "") : "";
-  const env = typeof $env !== "undefined" && $env ? $env : {};
-  const out = Object.assign({}, env);
-  if (!raw) return out;
-  raw.split("&").forEach(function (pair) {
-    const idx = pair.indexOf("=");
-    if (idx === -1) return;
-    out[decodeURIComponent(pair.slice(0, idx))] = decodeURIComponent(pair.slice(idx + 1));
+function isPlaceholder(s) {
+  const v = String(s || "").trim();
+  return !v || v.indexOf("{{") !== -1;
+}
+
+function pickFirstValid(values) {
+  for (let i = 0; i < values.length; i++) {
+    const v = String(values[i] || "").trim();
+    if (!isPlaceholder(v)) return v;
+  }
+  return "";
+}
+
+function mergeObject(out, src) {
+  if (!src || typeof src !== "object" || Array.isArray(src)) return out;
+  Object.keys(src).forEach(function (k) {
+    const v = src[k];
+    if (v != null && typeof v !== "object") out[k] = v;
   });
   return out;
+}
+
+/** 合并模块 argument、全局 $env、$environment（兼容 Egern / Surge） */
+function loadConfig() {
+  const out = {};
+
+  mergeObject(out, typeof $environment !== "undefined" ? $environment : null);
+  mergeObject(out, typeof $env !== "undefined" ? $env : null);
+
+  const arg = typeof $argument !== "undefined" ? $argument : null;
+  if (arg && typeof arg === "object" && !Array.isArray(arg)) {
+    mergeObject(out, arg);
+  } else if (arg != null) {
+    const raw = String(arg);
+    if (raw && raw !== "[object Object]") {
+      try {
+        new URLSearchParams(raw).forEach(function (v, k) {
+          out[k] = v;
+        });
+      } catch (e) {
+        raw.split("&").forEach(function (pair) {
+          const idx = pair.indexOf("=");
+          if (idx === -1) return;
+          try {
+            out[decodeURIComponent(pair.slice(0, idx))] = decodeURIComponent(pair.slice(idx + 1));
+          } catch (e2) {
+            /* skip */
+          }
+        });
+      }
+    }
+  }
+
+  return out;
+}
+
+function getRefreshToken(cfg) {
+  return pickFirstValid([
+    cfg && cfg.GUANGYA_REFRESH_TOKEN,
+    cfg && cfg.guangya_refresh_token,
+    cfg && cfg.guangyaRefreshToken,
+    cfg && cfg.refresh_token,
+    cfg && cfg.REFRESH_TOKEN
+  ]);
+}
+
+function tokenDiagnostic(cfg) {
+  const argType = typeof $argument;
+  const envObj = typeof $env !== "undefined" && $env ? $env : null;
+  const envKeys = envObj
+    ? Object.keys(envObj).filter(function (k) {
+      return /guangya|refresh|token/i.test(k);
+    }).join(",") || "无匹配键"
+    : "无 $env";
+  const moduleHit = getRefreshToken(cfg) ? "已读到" : "未读到";
+  return "诊断 v" + SCRIPT_VERSION + "：$argument=" + argType + "，token=" + moduleHit + "，$env=" + envKeys;
+}
+
+function decodeArg() {
+  return loadConfig();
 }
 
 function resolveVal(v, fallback) {
@@ -255,7 +325,7 @@ function guangyaSuccessPage(backUrl) {
 }
 
 function handleGuangya(magnet, cfg, reqUrl) {
-  const refresh = resolveVal(cfg.GUANGYA_REFRESH_TOKEN, "");
+  const refresh = getRefreshToken(cfg);
   const backUrl = (function () {
     try {
       const u = new URL(reqUrl.split("#")[0]);
@@ -268,7 +338,8 @@ function handleGuangya(magnet, cfg, reqUrl) {
 
   if (!refresh) {
     respondLocal(200, {}, htmlPage("未配置 Token", "<h1>未配置光鸭 Refresh Token</h1>" +
-      "<p>请在 Egern 模块参数填写 GUANGYA_REFRESH_TOKEN</p>" +
+      "<p>请在 <b>本模块参数</b> 或 <b>脚本环境变量</b> 中设置键名 <code>GUANGYA_REFRESH_TOKEN</code>（gy.- 开头）。</p>" +
+      "<p style=\"font-size:12px;color:#a1a1aa\">" + htmlEscape(tokenDiagnostic(cfg)) + "</p>" +
       (backUrl ? "<a class=\"btn btn-secondary\" href=\"" + htmlEscape(backUrl) + "\">返回</a>" : "")));
     return;
   }
