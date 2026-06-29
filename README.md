@@ -1,5 +1,12 @@
 # Egern 磁力拦截 · JavDB 优化版
 
+**当前版本：v1.1.0**
+
+| 版本 | 变更 |
+|------|------|
+| v1.1.0 | 页内弹层；去除新标签跳转；修复 about:blank 卡死；脚本加 @version |
+| v1.0.x | 虚拟域名 HTTPS 改写（已废弃） |
+
 针对 **JavDB 详情页点击「下载」** 的场景优化，效果类似 KeepShare 操作页：
 
 - 复制磁力链接
@@ -76,12 +83,9 @@ hostname = %APPEND% javdb567.com
 
 ## 常见问题
 
-- **egern-magnet.local 无法访问 / 网页打不开**：
-  1. 这是**虚拟域名**，不是真实网站，必须 **Egern 代理已开启** 且模块已启用
-  2. 模块需包含 `[Host]` 和 `[General] force-http-engine-hosts`（新版已内置）
-  3. MITM 证书必须 **完全信任**
-  4. 更新模块后 **重新打开 JavDB 详情页**（旧页面 HTML 可能仍是错误链接）
-  5. iOS 对 `.local` 域名有时异常；若仍失败，把模块参数 **MAGNET_HOST** 改为 `egern-magnet.test` 并同步改 MITM / Host（或等下一版默认改用 `.test`）
+- **打开 about:blank 新标签一直 loading**：v1.1.0 已修复。旧版把链接改写到虚拟域名且保留 `target=_blank` 导致。请更新脚本并**强制刷新** JavDB 详情页（Safari 长按刷新）。
+- **JavDB-磁力改写 日志为空**：v1.1.0 起详情页**必定**注入脚本，响应头含 `X-Egern-Magnet-Ver: 1.1.0`。若仍为空，检查 MITM 是否包含你用的 JavDB 镜像域名（不仅是 javdb.com）。
+- **egern-magnet.local 无法访问**：仅「光鸭一键导入」会用到；需 Egern 代理开启、MITM 证书信任、`[Host]` + `force-http-engine-hosts` 已合并进总配置。
 - **点击下载没反应 / 仍直接跳磁力**：确认 MITM 域名包含 JavDB、证书已信任。
 - **操作页空白**：检查 GitHub Raw 脚本能否访问；Egern 日志是否有脚本报错。
 - **光鸭导入失败「空间不足」**：光鸭云盘空间已满，需清理后再试。

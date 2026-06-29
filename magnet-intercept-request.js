@@ -1,12 +1,9 @@
 /**
  * Egern / Surge — http-request
- * 虚拟域名 egern-magnet.local：
- *   /page    — 展示磁力操作页（JavDB 改写后的入口）
- *   /guangya — 光鸭云盘云下载
- *   /115     — 115 离线下载（KeepShare API 或 115 Web）
- *   /pikpak  — PikPak 导入（KeepShare API 或 PikPak Web）
- *
- * 注意：http-request 返回本地页面必须用 $done({ response: { ... } })
+ * @version 1.1.0
+ * @changelog
+ *   1.1.0 - 双格式 $done；HTTP 虚拟域名；去掉 inline onclick
+ *   1.0.x - 初版
  */
 
 const CLIENT_ID = "aMe-8VSlkrbQXpUR";
@@ -15,6 +12,8 @@ const API_BASE = "https://api.guangyapan.com";
 const SITE_ORIGIN = "https://www.guangyapan.com";
 const UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
+
+const SCRIPT_VERSION = "1.1.0";
 
 function decodeArg() {
   const raw = typeof $argument !== "undefined" ? String($argument || "") : "";
@@ -40,6 +39,12 @@ function resolveMagnetHost(cfg) {
   return DEFAULT_MAGNET_HOST;
 }
 
+function resolveVal(v, fallback) {
+  const s = String(v || "").trim();
+  if (!s || s.indexOf("{{") !== -1) return fallback;
+  return s;
+}
+
 function randomHex(len) {
   let s = "";
   for (let i = 0; i < len; i++) s += Math.floor(Math.random() * 16).toString(16);
@@ -54,53 +59,50 @@ function htmlEscape(s) {
     .replace(/"/g, "&quot;");
 }
 
-/** http-request 本地响应（Surge / Egern 标准格式） */
+/** 兼容 Surge(response 包裹) 与 Egern(顶层字段) 两种 $done 格式 */
 function respondLocal(status, headers, body) {
-  $done({
-    response: {
-      status: status || 200,
-      headers: Object.assign(
-        { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
-        headers || {}
-      ),
-      body: body || ""
-    }
-  });
+  const h = Object.assign(
+    {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Connection": "close",
+      "X-Egern-Magnet-Ver": SCRIPT_VERSION
+    },
+    headers || {}
+  );
+  const st = status || 200;
+  const b = body || "";
+  const resp = { status: st, headers: h, body: b };
+  $done({ response: resp, status: st, headers: h, body: b });
 }
 
 function respondRedirect(location) {
-  $done({
-    response: {
-      status: 302,
-      headers: { Location: location, "Cache-Control": "no-store" }
-    }
-  });
+  const h = { Location: location, "Cache-Control": "no-store", "Connection": "close" };
+  $done({ response: { status: 302, headers: h }, status: 302, headers: h });
+}
+
+function magnetBase(cfg) {
+  return "http://" + resolveMagnetHost(cfg);
 }
 
 function buildMagnetPage(magnet, cfg) {
-  const host = resolveMagnetHost(cfg);
+  const base = magnetBase(cfg);
   const enc = encodeURIComponent(magnet);
-  const base = "https://" + host;
-  const copyJs =
-    "navigator.clipboard&&navigator.clipboard.writeText(" +
-    JSON.stringify(magnet) +
-    ").then(function(){alert('已复制磁力链接')}).catch(function(){prompt('复制磁力链接'," +
-    JSON.stringify(magnet) +
-    ")})";
+  const show115 = resolveVal(cfg.ENABLE_115, "1") !== "0";
+  const showPikpak = resolveVal(cfg.ENABLE_PIKPAK, "1") !== "0";
+  const showGuangya = resolveVal(cfg.ENABLE_GUANGYA, "1") !== "0";
+  const ks = parseKeepShareTemplate(cfg);
 
-  const show115 = cfg.ENABLE_115 !== "0";
-  const showPikpak = cfg.ENABLE_PIKPAK !== "0";
-  const showGuangya = cfg.ENABLE_GUANGYA !== "0";
-
-  let buttons =
-    "<button class=\"btn btn-gray\" onclick=\"" + copyJs + "\">复制磁力链接</button>";
+  let buttons = "";
   if (show115) {
-    buttons += "<a class=\"btn btn-green\" href=\"" + htmlEscape(base + "/115?magnet=" + enc) +
-      "\">115 网盘 · 离线下载</a>";
+    const u115 = ks ? ks.base + enc + "?action=115" :
+      "https://115.com/web/lixian/?ct=offline&ac=add&url=" + enc;
+    buttons += "<a class=\"btn btn-green\" href=\"" + htmlEscape(u115) + "\">115 网盘 · 离线下载</a>";
   }
   if (showPikpak) {
-    buttons += "<a class=\"btn btn-blue\" href=\"" + htmlEscape(base + "/pikpak?magnet=" + enc) +
-      "\">PikPak · 一键导入</a>";
+    const upk = ks ? ks.base + enc + "?action=pikpak" :
+      "https://mypikpak.com/drive/all?action=add_magnet&url=" + enc;
+    buttons += "<a class=\"btn btn-blue\" href=\"" + htmlEscape(upk) + "\">PikPak · 一键导入</a>";
   }
   if (showGuangya) {
     buttons += "<a class=\"btn btn-green btn-guangya\" href=\"" +
@@ -111,36 +113,31 @@ function buildMagnetPage(magnet, cfg) {
     "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\">" +
     "<title>检测到磁力链接</title>" +
     "<style>*{box-sizing:border-box;margin:0;padding:0}" +
-    "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;" +
-    "background:#0b0b0f;color:#f2f2f7;min-height:100vh;padding:24px 16px 40px}" +
-    ".card{max-width:520px;margin:0 auto;background:#16161d;border:1px solid #2a2a35;" +
-    "border-radius:18px;padding:22px 18px;box-shadow:0 12px 40px rgba(0,0,0,0.35)}" +
-    "h1{font-size:22px;font-weight:700;margin-bottom:8px}" +
-    ".sub{font-size:13px;line-height:1.5;color:#a1a1aa;margin-bottom:18px}" +
-    ".magnet{background:#0f0f14;border:1px solid #30303a;border-radius:12px;padding:12px;" +
-    "font-size:12px;line-height:1.55;word-break:break-all;color:#d4d4d8;margin-bottom:16px;max-height:160px;overflow:auto}" +
-    ".btn{display:block;width:100%;border:0;border-radius:12px;padding:14px 16px;font-size:16px;" +
-    "font-weight:600;margin-bottom:10px;cursor:pointer;text-decoration:none;text-align:center}" +
-    ".btn-gray{background:#3f3f46;color:#fff}.btn-green{background:#22c55e;color:#052e16}" +
-    ".btn-green.btn-guangya{background:#16a34a;color:#fff}.btn-blue{background:#3b82f6;color:#fff}" +
-    ".hint{font-size:12px;color:#71717a;text-align:center;margin-top:8px}</style></head><body>" +
-    "<div class=\"card\"><h1>检测到磁力链接</h1>" +
-    "<p class=\"sub\">请选择一个操作。需要返回 JavDB 详情页时，使用浏览器返回按钮。</p>" +
-    "<div class=\"magnet\">" + htmlEscape(magnet) + "</div>" + buttons +
-    "<p class=\"hint\">由 Egern 本地脚本拦截 · 不经过第三方中转</p></div></body></html>";
+    "body{font-family:-apple-system,sans-serif;background:#0b0b0f;color:#f2f2f7;padding:24px 16px}" +
+    ".card{max-width:520px;margin:0 auto;background:#16161d;border:1px solid #2a2a35;border-radius:18px;padding:20px 16px}" +
+    "h1{font-size:22px;margin-bottom:8px}.sub{font-size:13px;color:#a1a1aa;margin-bottom:14px}" +
+    "textarea{width:100%;height:88px;background:#0f0f14;color:#d4d4d8;border:1px solid #30303a;border-radius:10px;padding:10px;font-size:12px;word-break:break-all}" +
+    ".btn{display:block;width:100%;border-radius:12px;padding:14px;font-size:16px;font-weight:600;margin-top:10px;text-decoration:none;text-align:center}" +
+    ".btn-green{background:#22c55e;color:#052e16}.btn-green.btn-guangya{background:#16a34a;color:#fff}" +
+    ".btn-blue{background:#3b82f6;color:#fff}" +
+    ".hint{font-size:12px;color:#71717a;text-align:center;margin-top:12px}" +
+    "</style></head><body><div class=\"card\">" +
+    "<h1>检测到磁力链接</h1>" +
+    "<p class=\"sub\">长按下方文本可复制。115 / PikPak 为外链，光鸭走本地脚本。</p>" +
+    "<textarea readonly>" + htmlEscape(magnet) + "</textarea>" + buttons +
+    "<p class=\"hint\"><a href=\"javascript:history.back()\" style=\"color:#71717a\">返回上一页</a></p>" +
+    "</div></body></html>";
 }
 
 function htmlPage(title, bodyHtml) {
   return "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">" +
     "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
     "<title>" + title + "</title>" +
-    "<style>body{font-family:-apple-system,sans-serif;background:#0b0b0f;color:#f4f4f5;" +
-    "padding:24px 16px}.card{max-width:520px;margin:0 auto;background:#16161d;border-radius:16px;" +
-    "padding:20px;border:1px solid #2a2a35}h1{font-size:20px;margin-bottom:12px}" +
-    "p{font-size:14px;line-height:1.6;color:#d4d4d8;margin-bottom:10px}" +
-    "a{color:#60a5fa;text-decoration:none}.btn{display:inline-block;margin-top:12px;padding:10px 14px;" +
-    "background:#3b82f6;color:#fff;border-radius:10px}</style></head><body><div class=\"card\">" +
-    bodyHtml + "</div></body></html>";
+    "<style>body{font-family:-apple-system,sans-serif;background:#0b0b0f;color:#f4f4f5;padding:24px 16px}" +
+    ".card{max-width:520px;margin:0 auto;background:#16161d;border-radius:16px;padding:20px;border:1px solid #2a2a35}" +
+    "h1{font-size:20px;margin-bottom:12px}p{font-size:14px;line-height:1.6;color:#d4d4d8;margin-bottom:10px}" +
+    "a{color:#60a5fa;text-decoration:none}.btn{display:inline-block;margin-top:12px;padding:10px 14px;background:#3b82f6;color:#fff;border-radius:10px}" +
+    "</style></head><body><div class=\"card\">" + bodyHtml + "</div></body></html>";
 }
 
 function httpPost(url, headers, bodyObj) {
@@ -149,7 +146,7 @@ function httpPost(url, headers, bodyObj) {
       url: url,
       headers: headers,
       body: JSON.stringify(bodyObj),
-      timeout: 30
+      timeout: 25
     }, function (err, resp, data) {
       if (err) return reject(err);
       try {
@@ -218,8 +215,8 @@ async function createGuangyaTask(token, did, magnet, parentId) {
 }
 
 function parseKeepShareTemplate(cfg) {
-  const raw = String(cfg.KEEPSHARE_TEMPLATE || cfg.KEEPSHARE_SHARE_ID || "").trim();
-  if (!raw || raw.indexOf("{{") !== -1) return null;
+  const raw = resolveVal(cfg.KEEPSHARE_TEMPLATE || cfg.KEEPSHARE_SHARE_ID, "");
+  if (!raw) return null;
   if (!raw.includes("/") && !raw.includes(".")) {
     return { base: "https://keepshare.cc/" + raw + "/" };
   }
@@ -230,12 +227,6 @@ function parseKeepShareTemplate(cfg) {
   } catch (e) {
     return null;
   }
-}
-
-function keepshareActionUrl(cfg, magnet, action) {
-  const ks = parseKeepShareTemplate(cfg);
-  if (!ks) return "";
-  return ks.base + encodeURIComponent(magnet) + "?action=" + action;
 }
 
 function parseRequest() {
@@ -266,8 +257,8 @@ if (req.host !== host) {
   if (!magnet || magnet.indexOf("magnet:") !== 0) {
     respondLocal(400, {}, htmlPage("参数错误", "<h1>缺少有效磁力链接</h1>"));
   } else {
-    const ks = keepshareActionUrl(cfg, magnet, "115");
-    const target = ks ||
+    const ks = parseKeepShareTemplate(cfg);
+    const target = ks ? ks.base + encodeURIComponent(magnet) + "?action=115" :
       "https://115.com/web/lixian/?ct=offline&ac=add&url=" + encodeURIComponent(magnet);
     respondRedirect(target);
   }
@@ -276,42 +267,37 @@ if (req.host !== host) {
   if (!magnet || magnet.indexOf("magnet:") !== 0) {
     respondLocal(400, {}, htmlPage("参数错误", "<h1>缺少有效磁力链接</h1>"));
   } else {
-    const ks = keepshareActionUrl(cfg, magnet, "pikpak");
-    const target = ks ||
+    const ks = parseKeepShareTemplate(cfg);
+    const target = ks ? ks.base + encodeURIComponent(magnet) + "?action=pikpak" :
       "https://mypikpak.com/drive/all?action=add_magnet&url=" + encodeURIComponent(magnet);
     respondRedirect(target);
   }
 } else if (req.path === "/guangya") {
+  const magnet = req.magnet;
+  if (!magnet || magnet.indexOf("magnet:") !== 0) {
+    respondLocal(400, {}, htmlPage("参数错误", "<h1>缺少有效磁力链接</h1>"));
+    return;
+  }
+  const refresh = resolveVal(cfg.GUANGYA_REFRESH_TOKEN, "");
+  if (!refresh) {
+    respondLocal(200, {}, htmlPage("未配置 Token", "<h1>未配置光鸭 Refresh Token</h1>" +
+      "<p>请在 Egern 模块参数填写 GUANGYA_REFRESH_TOKEN</p>" +
+      "<p style=\"word-break:break-all;font-size:12px\">" + htmlEscape(magnet) + "</p>"));
+    return;
+  }
   (async function () {
-    const magnet = req.magnet;
-    if (!magnet || magnet.indexOf("magnet:") !== 0) {
-      respondLocal(400, {}, htmlPage("参数错误", "<h1>缺少有效磁力链接</h1><p>请从拦截页重新进入。</p>"));
-      return;
-    }
-
-    const refresh = cfg.GUANGYA_REFRESH_TOKEN || "";
-    if (!refresh || refresh.indexOf("{{") !== -1) {
-      respondLocal(200, {}, htmlPage("未配置 Token", "<h1>未配置光鸭 Refresh Token</h1>" +
-        "<p>请在 Egern 模块参数中设置 <code>GUANGYA_REFRESH_TOKEN</code>，然后重试。</p>" +
-        "<p style=\"word-break:break-all;font-size:12px;opacity:.8\">" + htmlEscape(magnet) + "</p>"));
-      return;
-    }
-
     try {
       const did = cfg.GUANGYA_DID || randomHex(32);
       const token = await refreshAccessToken(refresh, did);
       const result = await createGuangyaTask(token, did, magnet, cfg.GUANGYA_PARENT_ID || "");
       const ok = result && (result.msg === "success" || result.code === 0 || result.data);
       const msg = (result && result.msg) || JSON.stringify(result);
-
       if (ok) {
         respondLocal(200, {}, htmlPage("导入成功", "<h1>已提交光鸭云下载</h1>" +
-          "<p>任务已创建，请到光鸭云盘 App / 网页的「云下载」查看进度。</p>" +
-          "<p style=\"font-size:12px;opacity:.75;word-break:break-all\">" + htmlEscape(magnet) + "</p>" +
+          "<p>请到光鸭 App / 网页「云下载」查看进度。</p>" +
           "<a class=\"btn\" href=\"javascript:history.back()\">返回</a>"));
       } else {
         respondLocal(200, {}, htmlPage("导入失败", "<h1>光鸭返回异常</h1><p>" + htmlEscape(msg) + "</p>" +
-          "<p style=\"font-size:12px;word-break:break-all\">" + htmlEscape(magnet) + "</p>" +
           "<a class=\"btn\" href=\"javascript:history.back()\">返回</a>"));
       }
     } catch (e) {

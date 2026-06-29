@@ -1,5 +1,5 @@
 #!name=磁力拦截 · JavDB / 光鸭
-#!desc=JavDB 点击下载时展示操作页（复制 / 115 / PikPak / 光鸭），兼容 KeepShare 中转。需 MITM 信任证书。
+#!desc=JavDB 下载页内弹层 + 光鸭/KeepShare v1.1.0
 #!author=老头
 #!system=ios
 #!category=🧲 磁力
@@ -15,21 +15,19 @@ ENABLE_GUANGYA: 显示光鸭按钮, 1
 #!arguments-end
 
 [Script]
-# JavDB 详情页：把 magnet: 下载链接改写为本地操作页
-JavDB-磁力改写 = type=http-response,pattern=^https?://(?:[\w-]+\.)?javdb\d*\.com/v/,script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/javdb-magnet-rewrite.js,requires-body=1,max-size=5242880,argument=MAGNET_HOST=egern-magnet.local
+# v1.1.0 — JavDB 页内弹层，不跳转新标签
+JavDB-磁力改写 = type=http-response,pattern=^https?://(?:[\w-]+\.)?javdb\d*\.com/v/,script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/javdb-magnet-rewrite.js,requires-body=1,max-size=5242880,argument=MAGNET_HOST=egern-magnet.local&KEEPSHARE_TEMPLATE={{{KEEPSHARE_TEMPLATE}}}&ENABLE_115={{{ENABLE_115}}}&ENABLE_PIKPAK={{{ENABLE_PIKPAK}}}&ENABLE_GUANGYA={{{ENABLE_GUANGYA}}}
 
-# KeepShare 中转页：直接替换为本地操作页
+# v1.1.0 — KeepShare 中转页替换
 磁力拦截-KeepShare = type=http-response,pattern=^https?://(?:[\w-]+\.)?keepshare\.(?:org|cc)/,script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/magnet-intercept-response.js,requires-body=1,max-size=2097152,argument=MAGNET_HOST=egern-magnet.local&KEEPSHARE_TEMPLATE={{{KEEPSHARE_TEMPLATE}}}&ENABLE_115={{{ENABLE_115}}}&ENABLE_PIKPAK={{{ENABLE_PIKPAK}}}&ENABLE_GUANGYA={{{ENABLE_GUANGYA}}}
 
-# 虚拟域名：操作页 / 光鸭 / 115 / PikPak（pattern 勿用 {{{}}}，Egern 可能不替换）
-磁力拦截-操作 = type=http-request,pattern=^https?://egern-magnet\.local/,script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/magnet-intercept-request.js,timeout=60,argument=GUANGYA_REFRESH_TOKEN={{{GUANGYA_REFRESH_TOKEN}}}&MAGNET_HOST=egern-magnet.local&GUANGYA_PARENT_ID={{{GUANGYA_PARENT_ID}}}&KEEPSHARE_TEMPLATE={{{KEEPSHARE_TEMPLATE}}}&ENABLE_115={{{ENABLE_115}}}&ENABLE_PIKPAK={{{ENABLE_PIKPAK}}}&ENABLE_GUANGYA={{{ENABLE_GUANGYA}}}
+# v1.1.0 — 光鸭等本地动作（HTTP）
+磁力拦截-操作 = type=http-request,pattern=^https?://egern-magnet\.local/,script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/magnet-intercept-request.js,timeout=30,argument=GUANGYA_REFRESH_TOKEN={{{GUANGYA_REFRESH_TOKEN}}}&MAGNET_HOST=egern-magnet.local&GUANGYA_PARENT_ID={{{GUANGYA_PARENT_ID}}}&KEEPSHARE_TEMPLATE={{{KEEPSHARE_TEMPLATE}}}&ENABLE_115={{{ENABLE_115}}}&ENABLE_PIKPAK={{{ENABLE_PIKPAK}}}&ENABLE_GUANGYA={{{ENABLE_GUANGYA}}}
 
 [General]
-# 必须：让 Egern 把该域名当 HTTP 请求交给脚本处理（否则无法本地响应）
 force-http-engine-hosts = %APPEND% egern-magnet.local
 
 [Host]
-# 必须：把虚拟域名解析到本机，否则会 DNS 失败「无法访问」
 egern-magnet.local = 127.0.0.1
 
 [MITM]
