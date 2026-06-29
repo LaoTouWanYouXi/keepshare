@@ -1,7 +1,8 @@
 /**
  * Egern / Surge — http-request
- * @version 1.1.4
+ * @version 1.2.4
  * @changelog
+ *   1.2.4 - 模块参数改为逗号分隔 positional（参考 trakt sgmodule）
  *   1.1.4 - KeepShare 跳转去掉 ?action=，使用模板域名（防 301）
  *   1.1.0 - 双格式 $done；HTTP 虚拟域名
  */
@@ -13,19 +14,133 @@ const SITE_ORIGIN = "https://www.guangyapan.com";
 const UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
 
-const SCRIPT_VERSION = "1.1.4";
+const SCRIPT_VERSION = "1.2.4";
 
-function decodeArg() {
-  const raw = typeof $argument !== "undefined" ? String($argument || "") : "";
-  const env = typeof $env !== "undefined" && $env ? $env : {};
-  const out = Object.assign({}, env);
-  if (!raw) return out;
-  raw.split("&").forEach(function (pair) {
-    const idx = pair.indexOf("=");
-    if (idx === -1) return;
-    out[decodeURIComponent(pair.slice(0, idx))] = decodeURIComponent(pair.slice(idx + 1));
+const POSITIONAL_ARG_KEYS = [
+  "GUANGYA_REFRESH_TOKEN",
+  "GUANGYA_PARENT_ID",
+  "KEEPSHARE_TEMPLATE",
+  "ENABLE_115",
+  "ENABLE_PIKPAK",
+  "ENABLE_GUANGYA",
+  "MAGNET_HOST"
+];
+const TOKEN_KEYS = [
+  "GUANGYA_REFRESH_TOKEN", "guangya_refresh_token", "guangyaRefreshToken",
+  "refresh_token", "REFRESH_TOKEN", "TOKEN", "token"
+];
+
+function isPlaceholder(s) {
+  const v = String(s || "").trim();
+  return !v || v.indexOf("{{") !== -1;
+}
+
+function pickFirstValid(values) {
+  for (let i = 0; i < values.length; i++) {
+    const v = String(values[i] || "").trim();
+    if (!isPlaceholder(v)) return v;
+  }
+  return "";
+}
+
+function mergeObject(out, src) {
+  if (!src || typeof src !== "object" || Array.isArray(src)) return out;
+  Object.keys(src).forEach(function (k) {
+    const v = src[k];
+    if (v != null && typeof v !== "object") out[k] = v;
   });
   return out;
+}
+
+function readCtxEnv() {
+  try {
+    if (typeof ctx !== "undefined" && ctx && ctx.env) return ctx.env;
+    if (typeof $ctx !== "undefined" && $ctx && $ctx.env) return $ctx.env;
+  } catch (e) { /* ignore */ }
+  return null;
+}
+
+function scanGyToken(text) {
+  const m = String(text || "").match(/gy\.[A-Za-z0-9_\-\.~+/=]{8,}/);
+  return m ? m[0] : "";
+}
+
+function parsePositionalArgument(raw, keys) {
+  const out = {};
+  const s = String(raw || "").trim();
+  if (!s || s === "[object Object]") return out;
+  const parts = s.split(",");
+  keys.forEach(function (key, i) {
+    if (parts[i] !== undefined) out[key] = String(parts[i]).trim();
+  });
+  return out;
+}
+
+function parseModuleArgString(raw) {
+  const out = {};
+  const s = String(raw || "");
+  if (!s || s === "[object Object]") return out;
+  if (s.charAt(0) === "{") {
+    try {
+      const j = JSON.parse(s);
+      if (j && typeof j === "object") return mergeObject(out, j);
+    } catch (e) { /* fall through */ }
+  }
+  POSITIONAL_ARG_KEYS.forEach(function (key) {
+    const marker = key + "=";
+    const idx = s.indexOf(marker);
+    if (idx === -1) return;
+    let rest = s.slice(idx + marker.length);
+    let cut = rest.length;
+    POSITIONAL_ARG_KEYS.forEach(function (nextKey) {
+      if (nextKey === key) return;
+      const pos = rest.indexOf("&" + nextKey + "=");
+      if (pos !== -1 && pos < cut) cut = pos;
+    });
+    let val = rest.slice(0, cut);
+    try { val = decodeURIComponent(val.replace(/\+/g, " ")); } catch (e) { /* keep */ }
+    out[key] = val;
+  });
+  return out;
+}
+
+function parseArgumentInput(arg) {
+  const out = {};
+  if (arg == null) return out;
+  if (typeof arg === "object" && !Array.isArray(arg)) return mergeObject(out, arg);
+  const raw = String(arg).trim();
+  if (!raw || raw === "[object Object]") return out;
+  if (raw.indexOf("=") !== -1 && /GUANGYA_REFRESH_TOKEN=/i.test(raw)) {
+    return parseModuleArgString(raw);
+  }
+  return parsePositionalArgument(raw, POSITIONAL_ARG_KEYS);
+}
+
+function getRefreshToken(cfg, argRaw) {
+  const ctxEnv = readCtxEnv();
+  const fromKeys = pickFirstValid(
+    TOKEN_KEYS.map(function (k) { return cfg && cfg[k]; }).concat(
+      ctxEnv ? TOKEN_KEYS.map(function (k) { return ctxEnv[k]; }) : []
+    )
+  );
+  if (fromKeys) return fromKeys;
+  return scanGyToken(argRaw) || scanGyToken(JSON.stringify(readCtxEnv() || {}));
+}
+
+function loadConfig() {
+  const out = {};
+  const argRaw = typeof $argument !== "undefined" ? String($argument || "") : "";
+  mergeObject(out, typeof $environment !== "undefined" ? $environment : null);
+  mergeObject(out, typeof $env !== "undefined" ? $env : null);
+  mergeObject(out, parseArgumentInput(typeof $argument !== "undefined" ? $argument : null));
+  mergeObject(out, readCtxEnv());
+  const token = getRefreshToken(out, argRaw);
+  if (token) out.GUANGYA_REFRESH_TOKEN = token;
+  return out;
+}
+
+function decodeArg() {
+  return loadConfig();
 }
 
 const DEFAULT_MAGNET_HOST = "egern-magnet.local";
@@ -284,7 +399,8 @@ if (req.host !== host) {
     respondLocal(400, {}, htmlPage("参数错误", "<h1>缺少有效磁力链接</h1>"));
     return;
   }
-  const refresh = resolveVal(cfg.GUANGYA_REFRESH_TOKEN, "");
+  const argRaw = typeof $argument !== "undefined" ? String($argument || "") : "";
+  const refresh = getRefreshToken(cfg, argRaw);
   if (!refresh) {
     respondLocal(200, {}, htmlPage("未配置 Token", "<h1>未配置光鸭 Refresh Token</h1>" +
       "<p>请在 Egern 模块参数填写 GUANGYA_REFRESH_TOKEN</p>" +
