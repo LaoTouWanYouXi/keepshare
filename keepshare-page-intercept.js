@@ -1,8 +1,9 @@
 /**
  * Egern / Surge — http-request
  * KeepShare 磁力页：请求发出前拦截；按钮走同域 ?egern= 动作（避免 egern-magnet.local 无效）
- * @version 1.2.2
+ * @version 1.2.3
  * @changelog
+ *   1.2.3 - 读取 Egern ctx.env；增强 $argument 解析与 gy. 扫描
  *   1.2.2 - 修复 Egern $argument 为对象 / 全局 $env 读不到 token
  *   1.2.1 - 按钮改 keepshare 同域 ?egern=；内联光鸭 API；成功后跳转打开 App
  *   1.2.0 - KeepShare 请求级拦截
@@ -16,7 +17,27 @@ const GUANGYA_APP_URL = "https://app.guangyapan.com/pan";
 const UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
 
-const SCRIPT_VERSION = "1.2.2";
+const SCRIPT_VERSION = "1.2.3";
+
+const MODULE_ARG_KEYS = [
+  "GUANGYA_REFRESH_TOKEN",
+  "GUANGYA_PARENT_ID",
+  "KEEPSHARE_TEMPLATE",
+  "ENABLE_115",
+  "ENABLE_PIKPAK",
+  "ENABLE_GUANGYA",
+  "MAGNET_HOST"
+];
+
+const TOKEN_KEYS = [
+  "GUANGYA_REFRESH_TOKEN",
+  "guangya_refresh_token",
+  "guangyaRefreshToken",
+  "refresh_token",
+  "REFRESH_TOKEN",
+  "TOKEN",
+  "token"
+];
 
 function isPlaceholder(s) {
   const v = String(s || "").trim();
@@ -40,60 +61,157 @@ function mergeObject(out, src) {
   return out;
 }
 
-/** 合并模块 argument、全局 $env、$environment（兼容 Egern / Surge） */
-function loadConfig() {
+function readCtxEnv() {
+  try {
+    if (typeof ctx !== "undefined" && ctx && ctx.env && typeof ctx.env === "object") return ctx.env;
+    if (typeof $ctx !== "undefined" && $ctx && $ctx.env && typeof $ctx.env === "object") return $ctx.env;
+  } catch (e) {
+    /* ignore */
+  }
+  return null;
+}
+
+function readPersistentToken() {
+  try {
+    if (typeof $persistentStore !== "undefined" && $persistentStore.read) {
+      return pickFirstValid([
+        $persistentStore.read("GUANGYA_REFRESH_TOKEN"),
+        $persistentStore.read("guangya_refresh_token")
+      ]);
+    }
+  } catch (e) {
+    /* ignore */
+  }
+  try {
+    if (typeof $prefs !== "undefined" && $prefs.valueForKey) {
+      return pickFirstValid([
+        $prefs.valueForKey("GUANGYA_REFRESH_TOKEN"),
+        $prefs.valueForKey("guangya_refresh_token")
+      ]);
+    }
+  } catch (e2) {
+    /* ignore */
+  }
+  return "";
+}
+
+function scanGyToken(text) {
+  const m = String(text || "").match(/gy\.[A-Za-z0-9_\-\.~+/=]{8,}/);
+  return m ? m[0] : "";
+}
+
+/** 按已知键边界解析，避免 token 内含 & 时被截断 */
+function parseModuleArgString(raw) {
   const out = {};
+  const s = String(raw || "");
+  if (!s || s === "[object Object]") return out;
 
-  mergeObject(out, typeof $environment !== "undefined" ? $environment : null);
-  mergeObject(out, typeof $env !== "undefined" ? $env : null);
+  if (s.charAt(0) === "{") {
+    try {
+      const j = JSON.parse(s);
+      if (j && typeof j === "object") return mergeObject(out, j);
+    } catch (e) {
+      /* fall through */
+    }
+  }
 
-  const arg = typeof $argument !== "undefined" ? $argument : null;
-  if (arg && typeof arg === "object" && !Array.isArray(arg)) {
-    mergeObject(out, arg);
-  } else if (arg != null) {
-    const raw = String(arg);
-    if (raw && raw !== "[object Object]") {
-      try {
-        new URLSearchParams(raw).forEach(function (v, k) {
-          out[k] = v;
-        });
-      } catch (e) {
-        raw.split("&").forEach(function (pair) {
-          const idx = pair.indexOf("=");
-          if (idx === -1) return;
-          try {
-            out[decodeURIComponent(pair.slice(0, idx))] = decodeURIComponent(pair.slice(idx + 1));
-          } catch (e2) {
-            /* skip */
-          }
-        });
-      }
+  MODULE_ARG_KEYS.forEach(function (key) {
+    const marker = key + "=";
+    const idx = s.indexOf(marker);
+    if (idx === -1) return;
+    let rest = s.slice(idx + marker.length);
+    let cut = rest.length;
+    MODULE_ARG_KEYS.forEach(function (nextKey) {
+      if (nextKey === key) return;
+      const pos = rest.indexOf("&" + nextKey + "=");
+      if (pos !== -1 && pos < cut) cut = pos;
+    });
+    let val = rest.slice(0, cut);
+    try {
+      val = decodeURIComponent(val.replace(/\+/g, " "));
+    } catch (e) {
+      /* keep raw */
+    }
+    out[key] = val;
+  });
+
+  if (!out.GUANGYA_REFRESH_TOKEN) {
+    try {
+      new URLSearchParams(s).forEach(function (v, k) {
+        if (!out[k]) out[k] = v;
+      });
+    } catch (e2) {
+      /* ignore */
     }
   }
 
   return out;
 }
 
-function getRefreshToken(cfg) {
-  return pickFirstValid([
-    cfg && cfg.GUANGYA_REFRESH_TOKEN,
-    cfg && cfg.guangya_refresh_token,
-    cfg && cfg.guangyaRefreshToken,
-    cfg && cfg.refresh_token,
-    cfg && cfg.REFRESH_TOKEN
-  ]);
+function parseArgumentInput(arg) {
+  const out = {};
+  if (arg == null) return out;
+  if (typeof arg === "object" && !Array.isArray(arg)) {
+    return mergeObject(out, arg);
+  }
+  return parseModuleArgString(String(arg));
+}
+
+/** 合并模块 argument、Egern ctx.env、Surge $env（兼容多平台） */
+function loadConfig() {
+  const out = {};
+  const argRaw = typeof $argument !== "undefined" ? String($argument || "") : "";
+
+  mergeObject(out, typeof $environment !== "undefined" ? $environment : null);
+  mergeObject(out, typeof $env !== "undefined" ? $env : null);
+  mergeObject(out, parseArgumentInput(typeof $argument !== "undefined" ? $argument : null));
+  mergeObject(out, readCtxEnv());
+
+  const token = getRefreshToken(out, argRaw);
+  if (token) out.GUANGYA_REFRESH_TOKEN = token;
+
+  return out;
+}
+
+function getRefreshToken(cfg, argRaw) {
+  const ctxEnv = readCtxEnv();
+  const fromKeys = pickFirstValid(
+    TOKEN_KEYS.map(function (k) {
+      return cfg && cfg[k];
+    }).concat(
+      ctxEnv ? TOKEN_KEYS.map(function (k) { return ctxEnv[k]; }) : []
+    )
+  );
+  if (fromKeys) return fromKeys;
+
+  const persisted = readPersistentToken();
+  if (persisted) return persisted;
+
+  return scanGyToken(argRaw) || scanGyToken(JSON.stringify(readCtxEnv() || {}));
 }
 
 function tokenDiagnostic(cfg) {
-  const argType = typeof $argument;
-  const envObj = typeof $env !== "undefined" && $env ? $env : null;
-  const envKeys = envObj
-    ? Object.keys(envObj).filter(function (k) {
+  const argRaw = typeof $argument !== "undefined" ? String($argument || "") : "";
+  const hasKey = /GUANGYA_REFRESH_TOKEN=/i.test(argRaw);
+  const placeholder = /\{\{\{?\s*GUANGYA_REFRESH_TOKEN\s*\}?\}\}/.test(argRaw);
+  const emptyVal = /GUANGYA_REFRESH_TOKEN=(?:&|$)/.test(argRaw);
+  const ctxEnv = readCtxEnv();
+  const ctxKeys = ctxEnv
+    ? Object.keys(ctxEnv).filter(function (k) {
       return /guangya|refresh|token/i.test(k);
     }).join(",") || "无匹配键"
-    : "无 $env";
-  const moduleHit = getRefreshToken(cfg) ? "已读到" : "未读到";
-  return "诊断 v" + SCRIPT_VERSION + "：$argument=" + argType + "，token=" + moduleHit + "，$env=" + envKeys;
+    : "无 ctx.env";
+  const gyScan = scanGyToken(argRaw) ? "是" : "否";
+  const tokenLen = getRefreshToken(cfg, argRaw).length;
+
+  return "诊断 v" + SCRIPT_VERSION +
+    "：argument长度=" + argRaw.length +
+    "，含TOKEN键=" + (hasKey ? "是" : "否") +
+    "，占位符未替换=" + (placeholder ? "是" : "否") +
+    "，TOKEN值为空=" + (emptyVal ? "是" : "否") +
+    "，ctx.env=" + ctxKeys +
+    "，gy扫描=" + gyScan +
+    "，token长度=" + tokenLen;
 }
 
 function decodeArg() {
@@ -325,7 +443,8 @@ function guangyaSuccessPage(backUrl) {
 }
 
 function handleGuangya(magnet, cfg, reqUrl) {
-  const refresh = getRefreshToken(cfg);
+  const argRaw = typeof $argument !== "undefined" ? String($argument || "") : "";
+  const refresh = getRefreshToken(cfg, argRaw);
   const backUrl = (function () {
     try {
       const u = new URL(reqUrl.split("#")[0]);
@@ -338,7 +457,9 @@ function handleGuangya(magnet, cfg, reqUrl) {
 
   if (!refresh) {
     respondLocal(200, {}, htmlPage("未配置 Token", "<h1>未配置光鸭 Refresh Token</h1>" +
-      "<p>请在 <b>本模块参数</b> 或 <b>脚本环境变量</b> 中设置键名 <code>GUANGYA_REFRESH_TOKEN</code>（gy.- 开头）。</p>" +
+      "<p><b>Egern 请二选一：</b></p>" +
+      "<p>1. 模块 → 本模块 → <b>参数</b> → 填写 <code>GUANGYA_REFRESH_TOKEN</code></p>" +
+      "<p>2. 脚本 → 磁力拦截-KeepShare → <b>环境变量 env</b> → 键名 <code>GUANGYA_REFRESH_TOKEN</code></p>" +
       "<p style=\"font-size:12px;color:#a1a1aa\">" + htmlEscape(tokenDiagnostic(cfg)) + "</p>" +
       (backUrl ? "<a class=\"btn btn-secondary\" href=\"" + htmlEscape(backUrl) + "\">返回</a>" : "")));
     return;
