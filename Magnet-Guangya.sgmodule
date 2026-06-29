@@ -1,5 +1,5 @@
 #!name=磁力拦截 · JavDB / 光鸭
-#!desc=JavDB 页内弹层 + 光鸭/KeepShare v1.1.2
+#!desc=JavDB 页内弹层 + 光鸭 v1.1.3（KeepShare 拦截已默认关闭）
 #!author=老头
 #!system=ios
 #!category=🧲 磁力
@@ -8,20 +8,20 @@
 GUANGYA_REFRESH_TOKEN: 光鸭 refresh_token（gy.- 开头，一键导入必填）
 MAGNET_HOST: 虚拟操作域名, egern-magnet.local
 GUANGYA_PARENT_ID: 光鸭保存目录 ID（留空=根目录）
-KEEPSHARE_TEMPLATE: Auto Keep Sharing Link Template, https://keepshare.cc/ppvt5qst/
+KEEPSHARE_TEMPLATE: 115/PikPak 按钮用的 KeepShare 模板（非拦截脚本）, https://keepshare.cc/ppvt5qst/
 ENABLE_115: 显示 115 按钮, 1
 ENABLE_PIKPAK: 显示 PikPak 按钮, 1
 ENABLE_GUANGYA: 显示光鸭按钮, 1
 #!arguments-end
 
 [Script]
-# v1.1.2 — JavDB 页内弹层，拦截 window.open / 新标签
+# v1.1.3 — JavDB 页内弹层（保留 magnet: 链接，仅去 target=_blank）
 JavDB-磁力改写 = type=http-response,pattern=^https?://(?:[\w-]+\.)?javdb\d*\.com/v/,script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/javdb-magnet-rewrite.js,requires-body=1,max-size=5242880,timeout=15,argument=MAGNET_HOST=egern-magnet.local&KEEPSHARE_TEMPLATE={{{KEEPSHARE_TEMPLATE}}}&ENABLE_115={{{ENABLE_115}}}&ENABLE_PIKPAK={{{ENABLE_PIKPAK}}}&ENABLE_GUANGYA={{{ENABLE_GUANGYA}}}
 
-# v1.1.1 — 仅匹配 KeepShare 磁力页（不拦 js/css/api，避免 timeout）
-磁力拦截-KeepShare = type=http-response,pattern=^https?://(?:[\w-]+\.)?keepshare\.(?:org|cc)/[^/?#]+/magnet,script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/magnet-intercept-response.js,timeout=5,argument=MAGNET_HOST=egern-magnet.local&KEEPSHARE_TEMPLATE={{{KEEPSHARE_TEMPLATE}}}&ENABLE_115={{{ENABLE_115}}}&ENABLE_PIKPAK={{{ENABLE_PIKPAK}}}&ENABLE_GUANGYA={{{ENABLE_GUANGYA}}}
+# ↓ 可选：仅当你会「直接打开 keepshare 磁力页」时才取消注释
+# 磁力拦截-KeepShare = type=http-response,pattern=^https?://(?:[\w-]+\.)?keepshare\.(?:org|cc)/[^/?#]+/magnet,script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/magnet-intercept-response.js,timeout=5,argument=MAGNET_HOST=egern-magnet.local&KEEPSHARE_TEMPLATE={{{KEEPSHARE_TEMPLATE}}}&ENABLE_115={{{ENABLE_115}}}&ENABLE_PIKPAK={{{ENABLE_PIKPAK}}}&ENABLE_GUANGYA={{{ENABLE_GUANGYA}}}
 
-# v1.1.0 — 光鸭等本地动作（HTTP）
+# v1.1.3 — 光鸭一键导入（HTTP 虚拟域名）
 磁力拦截-操作 = type=http-request,pattern=^https?://egern-magnet\.local/,script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/magnet-intercept-request.js,timeout=30,argument=GUANGYA_REFRESH_TOKEN={{{GUANGYA_REFRESH_TOKEN}}}&MAGNET_HOST=egern-magnet.local&GUANGYA_PARENT_ID={{{GUANGYA_PARENT_ID}}}&KEEPSHARE_TEMPLATE={{{KEEPSHARE_TEMPLATE}}}&ENABLE_115={{{ENABLE_115}}}&ENABLE_PIKPAK={{{ENABLE_PIKPAK}}}&ENABLE_GUANGYA={{{ENABLE_GUANGYA}}}
 
 [General]

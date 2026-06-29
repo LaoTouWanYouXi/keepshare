@@ -1,11 +1,22 @@
 # Egern 磁力拦截 · JavDB 优化版
 
-**当前版本：v1.1.1**
+**当前版本：v1.1.3**
 
 | 版本 | 变更 |
 |------|------|
-| v1.1.1 | KeepShare 脚本仅匹配 `/magnet` 路径，去掉 requires-body，修复 exec timeout |
-| v1.1.0 | 页内弹层；去除新标签跳转；修复 about:blank 卡死 |
+| v1.1.3 | 不再改 href 为 #，修复点击滚到顶部；KeepShare 拦截脚本默认关闭 |
+| v1.1.2 | window.open 拦截（已回退部分激进逻辑） |
+| v1.1.1 | KeepShare 脚本收窄匹配，修复 timeout |
+| v1.1.0 | JavDB 页内弹层 |
+
+## KeepShare 在本模块里的两个角色
+
+| 名称 | 作用 | 能否去掉 |
+|------|------|----------|
+| **KEEPSHARE_TEMPLATE 参数** | 弹层里点「115 / PikPak」时，跳转到你的 KeepShare 模板链接离线 | **不能去掉**（若要用 115/PikPak 走 KeepShare 账号） |
+| **磁力拦截-KeepShare 脚本** | 当你**直接在浏览器打开** `keepshare.cc/xxx/magnet...` 网页时，替换成本地操作页 | **可以去掉**（JavDB 弹层流程不经过这个网页） |
+
+JavDB 正常流程：`点下载 → 当前页弹层 → 选 115/PikPak/光鸭`，**不会打开 KeepShare 网站**，所以拦截 KeepShare 的脚本容易超时且非必需，v1.1.3 已默认注释掉。
 
 针对 **JavDB 详情页点击「下载」** 的场景优化，效果类似 KeepShare 操作页：
 
