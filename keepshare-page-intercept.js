@@ -1,8 +1,9 @@
 /**
  * Egern / Surge — http-request
  * KeepShare 磁力页：请求发出前拦截；按钮走同域 ?egern= 动作（避免 egern-magnet.local 无效）
- * @version 1.2.3
+ * @version 1.2.4
  * @changelog
+ *   1.2.4 - 模块参数改为逗号分隔 positional（参考 trakt sgmodule）
  *   1.2.3 - 读取 Egern ctx.env；增强 $argument 解析与 gy. 扫描
  *   1.2.2 - 修复 Egern $argument 为对象 / 全局 $env 读不到 token
  *   1.2.1 - 按钮改 keepshare 同域 ?egern=；内联光鸭 API；成功后跳转打开 App
@@ -17,16 +18,16 @@ const GUANGYA_APP_URL = "https://app.guangyapan.com/pan";
 const UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
 
-const SCRIPT_VERSION = "1.2.3";
+const SCRIPT_VERSION = "1.2.4";
 
-const MODULE_ARG_KEYS = [
+/** 与 Magnet-Guangya.sgmodule argument= 占位符顺序一致 */
+const POSITIONAL_ARG_KEYS = [
   "GUANGYA_REFRESH_TOKEN",
   "GUANGYA_PARENT_ID",
   "KEEPSHARE_TEMPLATE",
   "ENABLE_115",
   "ENABLE_PIKPAK",
-  "ENABLE_GUANGYA",
-  "MAGNET_HOST"
+  "ENABLE_GUANGYA"
 ];
 
 const TOKEN_KEYS = [
@@ -100,7 +101,18 @@ function scanGyToken(text) {
   return m ? m[0] : "";
 }
 
-/** 按已知键边界解析，避免 token 内含 & 时被截断 */
+function parsePositionalArgument(raw, keys) {
+  const out = {};
+  const s = String(raw || "").trim();
+  if (!s || s === "[object Object]") return out;
+  const parts = s.split(",");
+  keys.forEach(function (key, i) {
+    if (parts[i] !== undefined) out[key] = String(parts[i]).trim();
+  });
+  return out;
+}
+
+/** 按已知键边界解析 key=value 格式（兼容旧版） */
 function parseModuleArgString(raw) {
   const out = {};
   const s = String(raw || "");
@@ -115,6 +127,7 @@ function parseModuleArgString(raw) {
     }
   }
 
+  const MODULE_ARG_KEYS = POSITIONAL_ARG_KEYS.concat(["MAGNET_HOST"]);
   MODULE_ARG_KEYS.forEach(function (key) {
     const marker = key + "=";
     const idx = s.indexOf(marker);
@@ -154,7 +167,12 @@ function parseArgumentInput(arg) {
   if (typeof arg === "object" && !Array.isArray(arg)) {
     return mergeObject(out, arg);
   }
-  return parseModuleArgString(String(arg));
+  const raw = String(arg).trim();
+  if (!raw || raw === "[object Object]") return out;
+  if (raw.indexOf("=") !== -1 && /GUANGYA_REFRESH_TOKEN=/i.test(raw)) {
+    return parseModuleArgString(raw);
+  }
+  return parsePositionalArgument(raw, POSITIONAL_ARG_KEYS);
 }
 
 /** 合并模块 argument、Egern ctx.env、Surge $env（兼容多平台） */
@@ -192,9 +210,8 @@ function getRefreshToken(cfg, argRaw) {
 
 function tokenDiagnostic(cfg) {
   const argRaw = typeof $argument !== "undefined" ? String($argument || "") : "";
-  const hasKey = /GUANGYA_REFRESH_TOKEN=/i.test(argRaw);
+  const firstPart = argRaw.split(",")[0] || "";
   const placeholder = /\{\{\{?\s*GUANGYA_REFRESH_TOKEN\s*\}?\}\}/.test(argRaw);
-  const emptyVal = /GUANGYA_REFRESH_TOKEN=(?:&|$)/.test(argRaw);
   const ctxEnv = readCtxEnv();
   const ctxKeys = ctxEnv
     ? Object.keys(ctxEnv).filter(function (k) {
@@ -203,12 +220,13 @@ function tokenDiagnostic(cfg) {
     : "无 ctx.env";
   const gyScan = scanGyToken(argRaw) ? "是" : "否";
   const tokenLen = getRefreshToken(cfg, argRaw).length;
+  const format = argRaw.indexOf("=") !== -1 ? "key=value" : "positional";
 
   return "诊断 v" + SCRIPT_VERSION +
-    "：argument长度=" + argRaw.length +
-    "，含TOKEN键=" + (hasKey ? "是" : "否") +
+    "：格式=" + format +
+    "，argument长度=" + argRaw.length +
+    "，首段(token)长度=" + firstPart.length +
     "，占位符未替换=" + (placeholder ? "是" : "否") +
-    "，TOKEN值为空=" + (emptyVal ? "是" : "否") +
     "，ctx.env=" + ctxKeys +
     "，gy扫描=" + gyScan +
     "，token长度=" + tokenLen;
