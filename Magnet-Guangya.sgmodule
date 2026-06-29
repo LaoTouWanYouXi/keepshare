@@ -1,5 +1,5 @@
-#!name=磁力拦截 · JavDB / 光鸭
-#!desc=JavDB 页内弹层 + 光鸭 v1.1.4
+#!name=磁力拦截 · KeepShare / 光鸭
+#!desc=KeepShare 跳转前拦截 + 光鸭 v1.2.0
 #!author=老头
 #!system=ios
 #!category=🧲 磁力
@@ -15,20 +15,17 @@ ENABLE_GUANGYA: 显示光鸭按钮, 1
 #!arguments-end
 
 [Script]
-# v1.1.4 — 拦截 magnet: 与 keepshare 下载链接，页内弹层
-JavDB-磁力改写 = type=http-response,pattern=^https?://(?:[\w-]+\.)?javdb\d*\.com/v/,script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/javdb-magnet-rewrite.js,requires-body=1,max-size=5242880,timeout=15,argument=MAGNET_HOST=egern-magnet.local&KEEPSHARE_TEMPLATE={{{KEEPSHARE_TEMPLATE}}}&ENABLE_115={{{ENABLE_115}}}&ENABLE_PIKPAK={{{ENABLE_PIKPAK}}}&ENABLE_GUANGYA={{{ENABLE_GUANGYA}}}
-
-# v1.1.4 — 若仍进入 keepshare 磁力页，替换为本地操作页（防 301 白屏）
-磁力拦截-KeepShare = type=http-response,pattern=^https?://(?:[\w-]+\.)?keepshare\.(?:org|cc)/[^/?#]+/magnet,script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/magnet-intercept-response.js,timeout=5,argument=MAGNET_HOST=egern-magnet.local&KEEPSHARE_TEMPLATE={{{KEEPSHARE_TEMPLATE}}}&ENABLE_115={{{ENABLE_115}}}&ENABLE_PIKPAK={{{ENABLE_PIKPAK}}}&ENABLE_GUANGYA={{{ENABLE_GUANGYA}}}
+# v1.2.0 — JavDB 点下载正常进 keepshare，请求发出前替换为本地操作页（不触发 PikPak 自动跳转）
+磁力拦截-KeepShare = type=http-request,pattern=^https?://(?:[\w-]+\.)?keepshare\.(?:org|cc)/[^?#]*magnet,script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/keepshare-page-intercept.js,timeout=5,argument=MAGNET_HOST=egern-magnet.local&KEEPSHARE_TEMPLATE={{{KEEPSHARE_TEMPLATE}}}&ENABLE_115={{{ENABLE_115}}}&ENABLE_PIKPAK={{{ENABLE_PIKPAK}}}&ENABLE_GUANGYA={{{ENABLE_GUANGYA}}}
 
 # v1.1.4 — 光鸭 / 115 / PikPak 本地动作
 磁力拦截-操作 = type=http-request,pattern=^https?://egern-magnet\.local/,script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/magnet-intercept-request.js,timeout=30,argument=GUANGYA_REFRESH_TOKEN={{{GUANGYA_REFRESH_TOKEN}}}&MAGNET_HOST=egern-magnet.local&GUANGYA_PARENT_ID={{{GUANGYA_PARENT_ID}}}&KEEPSHARE_TEMPLATE={{{KEEPSHARE_TEMPLATE}}}&ENABLE_115={{{ENABLE_115}}}&ENABLE_PIKPAK={{{ENABLE_PIKPAK}}}&ENABLE_GUANGYA={{{ENABLE_GUANGYA}}}
 
 [General]
-force-http-engine-hosts = %APPEND% egern-magnet.local
+force-http-engine-hosts = %APPEND% egern-magnet.local, keepshare.org, keepshare.cc
 
 [Host]
 egern-magnet.local = 127.0.0.1
 
 [MITM]
-hostname = %APPEND% egern-magnet.local, javdb.com, javdb36.com, javdb37.com, keepshare.org, keepshare.cc
+hostname = %APPEND% egern-magnet.local, keepshare.org, keepshare.cc

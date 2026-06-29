@@ -1,9 +1,9 @@
 /**
- * Egern / Surge — http-response（备用，主流程见 keepshare-page-intercept.js）
+ * Egern / Surge — http-request
+ * 在访问 KeepShare 磁力页时，于请求发出前直接返回本地操作页（不连服务器、不触发 PikPak 自动跳转）
  * @version 1.2.0
  * @changelog
- *   1.2.0 - 主拦截改为 http-request（keepshare-page-intercept.js）
- *   1.1.x - http-response 替换 KeepShare 页
+ *   1.2.0 - 新增：KeepShare 请求级拦截，替代 JavDB 页内弹层流程
  */
 
 const SCRIPT_VERSION = "1.2.0";
@@ -44,6 +44,22 @@ function htmlEscape(s) {
     .replace(/"/g, "&quot;");
 }
 
+function respondLocal(status, headers, body) {
+  const h = Object.assign(
+    {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Connection": "close",
+      "X-Egern-Magnet-Ver": SCRIPT_VERSION
+    },
+    headers || {}
+  );
+  const st = status || 200;
+  const b = body || "";
+  const resp = { status: st, headers: h, body: b };
+  $done({ response: resp, status: st, headers: h, body: b });
+}
+
 function buildMagnetPage(magnet, cfg) {
   const base = "http://" + resolveMagnetHost(cfg);
   const enc = encodeURIComponent(magnet);
@@ -66,55 +82,62 @@ function buildMagnetPage(magnet, cfg) {
   }
 
   return "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">" +
-    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
+    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\">" +
     "<title>检测到磁力链接</title>" +
     "<style>*{box-sizing:border-box;margin:0;padding:0}" +
     "body{font-family:-apple-system,sans-serif;background:#0b0b0f;color:#f2f2f7;padding:24px 16px}" +
     ".card{max-width:520px;margin:0 auto;background:#16161d;border:1px solid #2a2a35;border-radius:18px;padding:20px 16px}" +
     "h1{font-size:22px;margin-bottom:8px}.sub{font-size:13px;color:#a1a1aa;margin-bottom:14px}" +
-    "textarea{width:100%;height:88px;background:#0f0f14;color:#d4d4d8;border:1px solid #30303a;border-radius:10px;padding:10px;font-size:12px;word-break:break-all;box-sizing:border-box}" +
+    "textarea{width:100%;height:88px;background:#0f0f14;color:#d4d4d8;border:1px solid #30303a;border-radius:10px;padding:10px;font-size:12px;word-break:break-all}" +
     ".btn{display:block;width:100%;border-radius:12px;padding:14px;font-size:16px;font-weight:600;margin-top:10px;text-decoration:none;text-align:center}" +
-    ".btn-green{background:#22c55e;color:#052e16}.btn-green.btn-guangya{background:#16a34a;color:#fff}.btn-blue{background:#3b82f6;color:#fff}" +
-    ".hint{font-size:12px;color:#71717a;text-align:center;margin-top:12px}</style></head><body>" +
-    "<div class=\"card\"><h1>检测到磁力链接</h1>" +
-    "<p class=\"sub\">长按下方文本可复制磁力链接。</p>" +
+    ".btn-green{background:#22c55e;color:#052e16}.btn-green.btn-guangya{background:#16a34a;color:#fff}" +
+    ".btn-blue{background:#3b82f6;color:#fff}" +
+    ".hint{font-size:12px;color:#71717a;text-align:center;margin-top:12px}" +
+    "</style></head><body><div class=\"card\">" +
+    "<h1>检测到磁力链接</h1>" +
+    "<p class=\"sub\">已拦截 KeepShare 自动跳转。长按下方文本可复制磁力链接。</p>" +
     "<textarea readonly>" + htmlEscape(magnet) + "</textarea>" + buttons +
-    "<p class=\"hint\">Egern v" + SCRIPT_VERSION + "</p></div></body></html>";
+    "<p class=\"hint\"><a href=\"javascript:history.back()\" style=\"color:#71717a\">返回上一页</a> · v" +
+    SCRIPT_VERSION + "</p></div></body></html>";
 }
 
-/** 只处理 URL 路径里带 magnet 的 KeepShare 链接 */
+/** 从 KeepShare URL 路径解析 magnet（与 JavDB 下载链接格式一致） */
 function extractMagnetFromKeepShareUrl(url) {
   const u = String(url || "");
-  if (!/keepshare\.(?:org|cc)\/[^/?#]+\/magnet/i.test(u)) return "";
-  const m = u.match(/keepshare\.(?:org|cc)\/[^/?#]+\/([^?#]+)/i);
-  if (!m) return "";
+  if (!/keepshare\.(?:org|cc)/i.test(u)) return "";
+
   try {
-    const part = decodeURIComponent(m[1]);
-    if (part.indexOf("magnet:") === 0) return part.split("&")[0].split("#")[0];
-    const inner = part.match(/magnet:\?[^\s]+/i);
-    return inner ? inner[0] : "";
-  } catch (e) {
-    if (m[1].indexOf("magnet%3A") === 0 || m[1].indexOf("magnet:") === 0) {
-      try { return decodeURIComponent(m[1]).split("&")[0]; } catch (e2) { return ""; }
+    const noQuery = u.split("?")[0].split("#")[0];
+    const parts = noQuery.split("/").filter(Boolean);
+    for (let i = parts.length - 1; i >= 0; i--) {
+      let seg = parts[i];
+      try {
+        seg = decodeURIComponent(seg);
+      } catch (e) {
+        /* keep raw */
+      }
+      if (/^magnet:/i.test(seg)) {
+        return seg.split("&")[0].split("#")[0];
+      }
+      const inner = seg.match(/magnet:\?[^\s]+/i);
+      if (inner) return inner[0];
     }
-    return "";
+  } catch (e) {
+    /* fall through */
   }
+  return "";
 }
 
 const cfg = decodeArg();
 const reqUrl = String($request.url || "");
-const magnet = extractMagnetFromKeepShareUrl(reqUrl);
 
-if (!magnet) {
+if (!/keepshare\.(?:org|cc)/i.test(reqUrl) || !/magnet/i.test(reqUrl)) {
   $done({});
 } else {
-  $done({
-    status: 200,
-    headers: {
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-store",
-      "X-Egern-Magnet-Ver": SCRIPT_VERSION
-    },
-    body: buildMagnetPage(magnet, cfg)
-  });
+  const magnet = extractMagnetFromKeepShareUrl(reqUrl);
+  if (!magnet) {
+    $done({});
+  } else {
+    respondLocal(200, {}, buildMagnetPage(magnet, cfg));
+  }
 }
