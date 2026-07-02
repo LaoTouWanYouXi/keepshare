@@ -1,7 +1,8 @@
 /**
  * Egern / Surge — http-request
- * @version 1.2.4
+ * @version 1.3.0
  * @changelog
+ *   1.3.0 - 光鸭导入前先 resolve_res，按规则过滤广告/ junk 后仅提交 fileIndexes
  *   1.2.4 - 模块参数改为逗号分隔 positional（参考 trakt sgmodule）
  *   1.1.4 - KeepShare 跳转去掉 ?action=，使用模板域名（防 301）
  *   1.1.0 - 双格式 $done；HTTP 虚拟域名
@@ -14,7 +15,7 @@ const SITE_ORIGIN = "https://www.guangyapan.com";
 const UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
 
-const SCRIPT_VERSION = "1.2.4";
+const SCRIPT_VERSION = "1.3.0";
 
 const POSITIONAL_ARG_KEYS = [
   "GUANGYA_REFRESH_TOKEN",
@@ -23,7 +24,21 @@ const POSITIONAL_ARG_KEYS = [
   "ENABLE_115",
   "ENABLE_PIKPAK",
   "ENABLE_GUANGYA",
-  "MAGNET_HOST"
+  "MAGNET_HOST",
+  "MAGNET_FILTER",
+  "MAGNET_BLOCK_PATTERNS",
+  "MAGNET_MIN_VIDEO_MB"
+];
+
+const VIDEO_EXTS = {
+  mp4: 1, mkv: 1, avi: 1, wmv: 1, mov: 1, m4v: 1,
+  ts: 1, flv: 1, rmvb: 1, webm: 1, "3gp": 1
+};
+
+const DEFAULT_BLOCK_PATTERN_SOURCES = [
+  "广告|推广|宣传|加群|更多资源|最新地址|影视大站|1024|91\\.tv|草榴",
+  "sample|preview|trailer|预告|预览|样片|精彩花絮",
+  "\\.(txt|url|nfo|htm|html|jpg|jpeg|png|gif|exe|apk|torrent)$"
 ];
 const TOKEN_KEYS = [
   "GUANGYA_REFRESH_TOKEN", "guangya_refresh_token", "guangyaRefreshToken",
@@ -255,13 +270,13 @@ function htmlPage(title, bodyHtml) {
     "</style></head><body><div class=\"card\">" + bodyHtml + "</div></body></html>";
 }
 
-function httpPost(url, headers, bodyObj) {
+function httpPost(url, headers, bodyObj, timeoutMs) {
   return new Promise(function (resolve, reject) {
     $httpClient.post({
       url: url,
       headers: headers,
       body: JSON.stringify(bodyObj),
-      timeout: 25
+      timeout: timeoutMs || 25
     }, function (err, resp, data) {
       if (err) return reject(err);
       try {
@@ -271,6 +286,246 @@ function httpPost(url, headers, bodyObj) {
       }
     });
   });
+}
+
+function isApiSuccess(result) {
+  return !!(result && (result.msg === "success" || result.code === 0 || result.data));
+}
+
+function toFiniteNumberOrNull(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function chooseBestNameCandidate(values) {
+  for (let i = 0; i < values.length; i++) {
+    const s = String(values[i] || "").trim();
+    if (s) return s;
+  }
+  return "";
+}
+
+function collectObjectArrays(node, out, seen) {
+  out = out || [];
+  seen = seen || (typeof WeakSet !== "undefined" ? new WeakSet() : null);
+  if (!node || typeof node !== "object") return out;
+  if (seen && seen.has(node)) return out;
+  if (seen) seen.add(node);
+
+  if (Array.isArray(node)) {
+    if (node.length && node.every(function (item) {
+      return item && typeof item === "object" && !Array.isArray(item);
+    })) {
+      out.push(node);
+    }
+    for (let i = 0; i < node.length; i++) collectObjectArrays(node[i], out, seen);
+    return out;
+  }
+
+  const keys = Object.keys(node);
+  for (let i = 0; i < keys.length; i++) collectObjectArrays(node[keys[i]], out, seen);
+  return out;
+}
+
+function findFirstValueByKeys(node, keys, seen) {
+  seen = seen || (typeof WeakSet !== "undefined" ? new WeakSet() : null);
+  if (!node || typeof node !== "object") return null;
+  if (seen && seen.has(node)) return null;
+  if (seen) seen.add(node);
+
+  for (let i = 0; i < keys.length; i++) {
+    if (Object.prototype.hasOwnProperty.call(node, keys[i])) return node[keys[i]];
+  }
+  if (Array.isArray(node)) {
+    for (let i = 0; i < node.length; i++) {
+      const found = findFirstValueByKeys(node[i], keys, seen);
+      if (found != null) return found;
+    }
+    return null;
+  }
+  const objKeys = Object.keys(node);
+  for (let j = 0; j < objKeys.length; j++) {
+    const found = findFirstValueByKeys(node[objKeys[j]], keys, seen);
+    if (found != null) return found;
+  }
+  return null;
+}
+
+function normalizeResolvedFileEntry(obj) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
+  const index = toFiniteNumberOrNull(
+    obj.fileIndex != null ? obj.fileIndex :
+    obj.file_index != null ? obj.file_index :
+    obj.index != null ? obj.index :
+    obj.idx != null ? obj.idx :
+    obj.fileNo != null ? obj.fileNo :
+    obj.file_no != null ? obj.file_no :
+    obj.seq
+  );
+  if (index == null || index < 0) return null;
+  const name = chooseBestNameCandidate([
+    obj.name, obj.fileName, obj.file_name, obj.filename,
+    obj.path, obj.filePath, obj.file_path, obj.fullPath, obj.full_path,
+    obj.resName, obj.resourceName, obj.title
+  ]);
+  const size = toFiniteNumberOrNull(
+    obj.fileSize != null ? obj.fileSize :
+    obj.file_size != null ? obj.file_size :
+    obj.size != null ? obj.size :
+    obj.length
+  );
+  return { index: index, name: name, size: size == null ? 0 : size, raw: obj };
+}
+
+function extractResolvedFileEntries(payload) {
+  const arrays = collectObjectArrays(payload);
+  let best = [];
+  let bestScore = -1;
+
+  for (let a = 0; a < arrays.length; a++) {
+    const arr = arrays[a];
+    let entries = arr.map(normalizeResolvedFileEntry).filter(Boolean);
+    entries = entries.filter(function (item, index, list) {
+      return list.findIndex(function (other) { return other.index === item.index; }) === index;
+    }).sort(function (x, y) { return x.index - y.index; });
+
+    if (!entries.length) {
+      const positional = [];
+      for (let i = 0; i < arr.length; i++) {
+        const name = chooseBestNameCandidate([
+          arr[i] && arr[i].name, arr[i] && arr[i].fileName, arr[i] && arr[i].file_name,
+          arr[i] && arr[i].filename, arr[i] && arr[i].path, arr[i] && arr[i].filePath,
+          arr[i] && arr[i].file_path, arr[i] && arr[i].fullPath, arr[i] && arr[i].full_path,
+          arr[i] && arr[i].resName, arr[i] && arr[i].resourceName, arr[i] && arr[i].title
+        ]);
+        if (!name) continue;
+        positional.push({
+          index: i,
+          name: name,
+          size: toFiniteNumberOrNull(arr[i] && (arr[i].fileSize || arr[i].size)) || 0,
+          raw: arr[i]
+        });
+      }
+      if (positional.length) entries = positional;
+    }
+
+    if (!entries.length) continue;
+    const nameCount = entries.filter(function (item) { return item.name; }).length;
+    const score = entries.length * 10 + nameCount * 3 + (entries.length > 1 ? 5 : 0);
+    if (score > bestScore) {
+      best = entries;
+      bestScore = score;
+    }
+  }
+
+  if (best.length) return best;
+
+  const explicitIndexes = findFirstValueByKeys(payload, ["fileIndexes", "file_indexes", "indexes"]);
+  if (Array.isArray(explicitIndexes) && explicitIndexes.length) {
+    return explicitIndexes.map(function (value) {
+      return toFiniteNumberOrNull(value);
+    }).filter(function (value) {
+      return value != null;
+    }).filter(function (value, index, list) {
+      return list.indexOf(value) === index;
+    }).sort(function (x, y) { return x - y; }).map(function (index) {
+      return { index: index, name: "", size: 0, raw: null };
+    });
+  }
+
+  const total = toFiniteNumberOrNull(findFirstValueByKeys(payload, [
+    "fileCount", "file_count", "totalCount", "total_count", "count", "total"
+  ]));
+  if (total != null && total > 0) {
+    const out = [];
+    for (let i = 0; i < total; i++) out.push({ index: i, name: "", size: 0, raw: null });
+    return out;
+  }
+  return [];
+}
+
+function parseRegexPatternSource(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return null;
+  if (s.charAt(0) === "/") {
+    const last = s.lastIndexOf("/");
+    if (last > 0) {
+      const body = s.slice(1, last);
+      const flags = s.slice(last + 1);
+      try { return new RegExp(body, flags || "i"); } catch (e) { /* fall through */ }
+    }
+  }
+  try { return new RegExp(s, "i"); } catch (e) { return null; }
+}
+
+function parseBlockPatterns(cfg) {
+  const raw = resolveVal(cfg.MAGNET_BLOCK_PATTERNS, "");
+  const sources = raw
+    ? raw.split(/[;|]/).map(function (s) { return String(s || "").trim(); }).filter(Boolean)
+    : DEFAULT_BLOCK_PATTERN_SOURCES.slice();
+  const patterns = [];
+  for (let i = 0; i < sources.length; i++) {
+    const re = parseRegexPatternSource(sources[i]);
+    if (re) patterns.push(re);
+  }
+  return patterns;
+}
+
+function isVideoFileName(name) {
+  const parts = String(name || "").split(".");
+  if (parts.length < 2) return false;
+  return !!VIDEO_EXTS[parts.pop().toLowerCase()];
+}
+
+function isMagnetFilterEnabled(cfg) {
+  return resolveVal(cfg.MAGNET_FILTER, "1") !== "0";
+}
+
+function getMinVideoMb(cfg) {
+  const n = Number(resolveVal(cfg.MAGNET_MIN_VIDEO_MB, "80"));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function shouldBlockMagnetFile(entry, patterns, minVideoMb) {
+  const name = String(entry.name || "");
+  if (name) {
+    for (let i = 0; i < patterns.length; i++) {
+      if (patterns[i].test(name)) return { blocked: true, reason: "pattern" };
+    }
+  }
+  if (minVideoMb > 0 && name && isVideoFileName(name)) {
+    const size = Number(entry.size || 0);
+    if (size > 0 && size < minVideoMb * 1024 * 1024) {
+      return { blocked: true, reason: "size" };
+    }
+  }
+  return { blocked: false, reason: "" };
+}
+
+function filterResolvedMagnetFiles(entries, cfg) {
+  const patterns = parseBlockPatterns(cfg);
+  const minVideoMb = getMinVideoMb(cfg);
+  const kept = [];
+  const blocked = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const verdict = shouldBlockMagnetFile(entry, patterns, minVideoMb);
+    if (verdict.blocked) blocked.push({ entry: entry, reason: verdict.reason });
+    else kept.push(entry);
+  }
+  return { kept: kept, blocked: blocked, patterns: patterns, minVideoMb: minVideoMb };
+}
+
+function formatBlockedPreview(blocked, limit) {
+  const max = limit || 8;
+  const lines = [];
+  for (let i = 0; i < blocked.length && i < max; i++) {
+    const item = blocked[i];
+    const label = item.entry.name || ("#" + item.entry.index);
+    lines.push(label + (item.reason === "size" ? " (过小)" : ""));
+  }
+  if (blocked.length > max) lines.push("… 另有 " + (blocked.length - max) + " 个");
+  return lines.join("<br>");
 }
 
 function accountHeaders(did) {
@@ -321,11 +576,23 @@ async function refreshAccessToken(refreshToken, did) {
   return data.access_token;
 }
 
-async function createGuangyaTask(token, did, magnet, parentId) {
+async function resolveGuangyaResource(token, did, url) {
+  return httpPost(
+    API_BASE + "/nd.bizcloudcollection.s/v1/resolve_res",
+    apiHeaders(token, did),
+    { url: url },
+    45
+  );
+}
+
+async function createGuangyaTask(token, did, magnet, parentId, fileIndexes) {
+  const body = { url: magnet, parentId: parentId || "" };
+  if (fileIndexes && fileIndexes.length) body.fileIndexes = fileIndexes;
   return httpPost(
     API_BASE + "/nd.bizcloudcollection.s/v1/create_task",
     apiHeaders(token, did),
-    { url: magnet, parentId: parentId || "" }
+    body,
+    30
   );
 }
 
@@ -411,11 +678,49 @@ if (req.host !== host) {
     try {
       const did = cfg.GUANGYA_DID || randomHex(32);
       const token = await refreshAccessToken(refresh, did);
-      const result = await createGuangyaTask(token, did, magnet, cfg.GUANGYA_PARENT_ID || "");
-      const ok = result && (result.msg === "success" || result.code === 0 || result.data);
+      const parentId = cfg.GUANGYA_PARENT_ID || "";
+      const filterEnabled = isMagnetFilterEnabled(cfg);
+      let fileIndexes = null;
+      let filterSummary = "";
+
+      if (filterEnabled) {
+        const resolved = await resolveGuangyaResource(token, did, magnet);
+        if (!isApiSuccess(resolved)) {
+          throw new Error((resolved && (resolved.msg || resolved.message)) || "解析磁力文件列表失败");
+        }
+        const entries = extractResolvedFileEntries(resolved);
+        if (!entries.length) {
+          throw new Error("无法从 resolve_res 获取文件列表，请设置 MAGNET_FILTER=0 关闭过滤后重试");
+        }
+        const filtered = filterResolvedMagnetFiles(entries, cfg);
+        if (!filtered.kept.length) {
+          respondLocal(200, {}, htmlPage("全部被过滤", "<h1>没有可下载的文件</h1>" +
+            "<p>共解析 " + entries.length + " 个文件，均被拦截规则命中。</p>" +
+            (filtered.blocked.length
+              ? "<p style=\"font-size:13px;color:#a1a1aa\">已拦截示例：<br>" +
+                formatBlockedPreview(filtered.blocked) + "</p>"
+              : "") +
+            "<p>可在模块参数调整 MAGNET_BLOCK_PATTERNS 或 MAGNET_MIN_VIDEO_MB，或设置 MAGNET_FILTER=0 关闭过滤。</p>" +
+            "<a class=\"btn\" href=\"javascript:history.back()\">返回</a>"));
+          return;
+        }
+        fileIndexes = filtered.kept.map(function (item) { return item.index; });
+        filterSummary = "<p>已解析 " + entries.length + " 个文件，提交 " + fileIndexes.length +
+          " 个，拦截 " + filtered.blocked.length + " 个。</p>";
+        if (filtered.blocked.length) {
+          filterSummary += "<p style=\"font-size:13px;color:#a1a1aa\">拦截示例：<br>" +
+            formatBlockedPreview(filtered.blocked) + "</p>";
+        }
+      }
+
+      const result = await createGuangyaTask(token, did, magnet, parentId, fileIndexes);
+      const ok = isApiSuccess(result);
       const msg = (result && result.msg) || JSON.stringify(result);
       if (ok) {
         respondLocal(200, {}, htmlPage("导入成功", "<h1>已提交光鸭云下载</h1>" +
+          (filterEnabled
+            ? filterSummary
+            : "<p>未启用文件过滤（全量下载）。</p>") +
           "<p>请到光鸭 App / 网页「云下载」查看进度。</p>" +
           "<a class=\"btn\" href=\"javascript:history.back()\">返回</a>"));
       } else {
