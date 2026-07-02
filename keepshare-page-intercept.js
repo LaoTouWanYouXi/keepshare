@@ -1,8 +1,9 @@
 /**
  * Egern / Surge — http-request
  * KeepShare 磁力页：请求发出前拦截；按钮走同域 ?egern= 动作（避免 egern-magnet.local 无效）
- * @version 1.2.4
+ * @version 1.3.2
  * @changelog
+ *   1.3.2 - 光鸭按钮改走 egern-magnet.local/guangya（复用过滤脚本）；去掉成功后自动跳转 App
  *   1.2.4 - 模块参数改为逗号分隔 positional（参考 trakt sgmodule）
  *   1.2.3 - 读取 Egern ctx.env；增强 $argument 解析与 gy. 扫描
  *   1.2.2 - 修复 Egern $argument 为对象 / 全局 $env 读不到 token
@@ -15,10 +16,11 @@ const ACCOUNT_URL = "https://account.guangyapan.com";
 const API_BASE = "https://api.guangyapan.com";
 const SITE_ORIGIN = "https://www.guangyapan.com";
 const GUANGYA_APP_URL = "https://app.guangyapan.com/pan";
+const DEFAULT_MAGNET_HOST = "egern-magnet.local";
 const UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
 
-const SCRIPT_VERSION = "1.2.4";
+const SCRIPT_VERSION = "1.3.2";
 
 /** 与 Magnet-Guangya.sgmodule argument= 占位符顺序一致 */
 const POSITIONAL_ARG_KEYS = [
@@ -27,7 +29,8 @@ const POSITIONAL_ARG_KEYS = [
   "KEEPSHARE_TEMPLATE",
   "ENABLE_115",
   "ENABLE_PIKPAK",
-  "ENABLE_GUANGYA"
+  "ENABLE_GUANGYA",
+  "MAGNET_HOST"
 ];
 
 const TOKEN_KEYS = [
@@ -293,6 +296,19 @@ function htmlPage(title, bodyHtml) {
     ".btn-secondary{background:#3b82f6}</style></head><body><div class=\"card\">" + bodyHtml + "</div></body></html>";
 }
 
+function resolveMagnetHost(cfg) {
+  const candidates = [cfg && cfg.MAGNET_HOST, cfg && cfg.magnet_host];
+  for (let i = 0; i < candidates.length; i++) {
+    const v = String(candidates[i] || "").trim();
+    if (v && v.indexOf("{{") === -1 && v.indexOf("}}") === -1) return v;
+  }
+  return DEFAULT_MAGNET_HOST;
+}
+
+function buildGuangyaImportUrl(magnet, cfg) {
+  return "http://" + resolveMagnetHost(cfg) + "/guangya?magnet=" + encodeURIComponent(magnet);
+}
+
 function buildActionUrl(reqUrl, action) {
   try {
     const u = new URL(reqUrl.split("#")[0]);
@@ -320,7 +336,7 @@ function buildMagnetPage(magnet, cfg, reqUrl) {
   }
   if (showGuangya) {
     buttons += "<a class=\"btn btn-green btn-guangya\" href=\"" +
-      htmlEscape(buildActionUrl(reqUrl, "guangya")) + "\">光鸭云盘 · 一键导入</a>";
+      htmlEscape(buildGuangyaImportUrl(magnet, cfg)) + "\">光鸭云盘 · 一键导入</a>";
   }
 
   return "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">" +
@@ -378,131 +394,6 @@ function parseEgernAction(url) {
   }
 }
 
-function httpPost(url, headers, bodyObj) {
-  return new Promise(function (resolve, reject) {
-    $httpClient.post({
-      url: url,
-      headers: headers,
-      body: JSON.stringify(bodyObj),
-      timeout: 25
-    }, function (err, resp, data) {
-      if (err) return reject(err);
-      try {
-        resolve(typeof data === "string" ? JSON.parse(data) : data);
-      } catch (e) {
-        reject(new Error("JSON parse failed: " + String(data).slice(0, 200)));
-      }
-    });
-  });
-}
-
-function accountHeaders(did) {
-  return {
-    accept: "*/*",
-    "content-type": "application/json",
-    origin: SITE_ORIGIN,
-    referer: SITE_ORIGIN + "/",
-    "user-agent": UA,
-    "x-client-id": CLIENT_ID,
-    "x-client-version": "0.0.1",
-    "x-device-id": did,
-    "x-device-model": "iphone%2F18.0",
-    "x-device-name": "iPhone",
-    "x-device-sign": "wdi10." + did + randomHex(32),
-    "x-net-work-type": "NONE",
-    "x-os-version": "iPhone OS 18.0",
-    "x-platform-version": "1",
-    "x-protocol-version": "301",
-    "x-provider-name": "NONE",
-    "x-sdk-version": "9.0.2",
-    "x-action": "401"
-  };
-}
-
-function apiHeaders(token, did) {
-  return {
-    accept: "application/json, text/plain, */*",
-    authorization: "Bearer " + token,
-    "content-type": "application/json",
-    did: did,
-    dt: "4",
-    origin: SITE_ORIGIN,
-    referer: SITE_ORIGIN + "/",
-    "user-agent": UA
-  };
-}
-
-async function refreshAccessToken(refreshToken, did) {
-  const data = await httpPost(
-    ACCOUNT_URL + "/v1/auth/token",
-    accountHeaders(did),
-    { client_id: CLIENT_ID, grant_type: "refresh_token", refresh_token: refreshToken }
-  );
-  if (!data || !data.access_token) {
-    throw new Error((data && (data.error_description || data.msg)) || "刷新 token 失败");
-  }
-  return data.access_token;
-}
-
-async function createGuangyaTask(token, did, magnet, parentId) {
-  return httpPost(
-    API_BASE + "/nd.bizcloudcollection.s/v1/create_task",
-    apiHeaders(token, did),
-    { url: magnet, parentId: parentId || "" }
-  );
-}
-
-function guangyaSuccessPage(backUrl) {
-  return htmlPage("导入成功", "<h1>已提交光鸭云下载</h1>" +
-    "<p>磁力任务已添加到光鸭云盘，正在尝试打开 App…</p>" +
-    "<a class=\"btn\" href=\"" + htmlEscape(GUANGYA_APP_URL) + "\">打开光鸭 App</a>" +
-    (backUrl ? "<br><a class=\"btn btn-secondary\" href=\"" + htmlEscape(backUrl) + "\">返回操作页</a>" : "") +
-    "<script>setTimeout(function(){window.location.href=\"" + GUANGYA_APP_URL.replace(/"/g, "\\\"") + "\";},600);</script>");
-}
-
-function handleGuangya(magnet, cfg, reqUrl) {
-  const argRaw = typeof $argument !== "undefined" ? String($argument || "") : "";
-  const refresh = getRefreshToken(cfg, argRaw);
-  const backUrl = (function () {
-    try {
-      const u = new URL(reqUrl.split("#")[0]);
-      u.searchParams.delete("egern");
-      return u.toString();
-    } catch (e) {
-      return "";
-    }
-  })();
-
-  if (!refresh) {
-    respondLocal(200, {}, htmlPage("未配置 Token", "<h1>未配置光鸭 Refresh Token</h1>" +
-      "<p><b>Egern 请二选一：</b></p>" +
-      "<p>1. 模块 → 本模块 → <b>参数</b> → 填写 <code>GUANGYA_REFRESH_TOKEN</code></p>" +
-      "<p>2. 脚本 → 磁力拦截-KeepShare → <b>环境变量 env</b> → 键名 <code>GUANGYA_REFRESH_TOKEN</code></p>" +
-      "<p style=\"font-size:12px;color:#a1a1aa\">" + htmlEscape(tokenDiagnostic(cfg)) + "</p>" +
-      (backUrl ? "<a class=\"btn btn-secondary\" href=\"" + htmlEscape(backUrl) + "\">返回</a>" : "")));
-    return;
-  }
-
-  (async function () {
-    try {
-      const did = cfg.GUANGYA_DID || randomHex(32);
-      const token = await refreshAccessToken(refresh, did);
-      const result = await createGuangyaTask(token, did, magnet, cfg.GUANGYA_PARENT_ID || "");
-      const ok = result && (result.msg === "success" || result.code === 0 || result.data);
-      const msg = (result && result.msg) || JSON.stringify(result);
-      if (ok) {
-        respondLocal(200, {}, guangyaSuccessPage(backUrl));
-      } else {
-        respondLocal(200, {}, htmlPage("导入失败", "<h1>光鸭返回异常</h1><p>" + htmlEscape(msg) + "</p>" +
-          (backUrl ? "<a class=\"btn btn-secondary\" href=\"" + htmlEscape(backUrl) + "\">返回</a>" : "")));
-      }
-    } catch (e) {
-      respondLocal(200, {}, htmlPage("请求失败", "<h1>调用光鸭 API 失败</h1><p>" + htmlEscape(e.message || e) + "</p>" +
-        (backUrl ? "<a class=\"btn btn-secondary\" href=\"" + htmlEscape(backUrl) + "\">返回</a>" : "")));
-    }
-  })();
-}
-
 const cfg = decodeArg();
 const reqUrl = String($request.url || "");
 
@@ -523,7 +414,7 @@ if (!/keepshare\.(?:org|cc)/i.test(reqUrl) || !/magnet/i.test(reqUrl)) {
         "https://mypikpak.com/drive/all?action=add_magnet&url=" + encodeURIComponent(magnet)
       );
     } else if (action === "guangya") {
-      handleGuangya(magnet, cfg, reqUrl);
+      respondRedirect(buildGuangyaImportUrl(magnet, cfg));
     } else {
       respondLocal(200, {}, buildMagnetPage(magnet, cfg, reqUrl));
     }

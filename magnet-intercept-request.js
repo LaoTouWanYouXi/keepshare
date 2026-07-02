@@ -1,7 +1,9 @@
 /**
  * Egern / Surge — http-request
- * @version 1.3.0
+ * @version 1.3.2
  * @changelog
+ *   1.3.2 - 成功页停留不跳转；KeepShare 入口改由 keepshare-page-intercept 转发至本脚本
+ *   1.3.1 - 增强 resolve 解析；默认仅保留视频；按体积剔除小广告片；成功页显示版本号
  *   1.3.0 - 光鸭导入前先 resolve_res，按规则过滤广告/ junk 后仅提交 fileIndexes
  *   1.2.4 - 模块参数改为逗号分隔 positional（参考 trakt sgmodule）
  *   1.1.4 - KeepShare 跳转去掉 ?action=，使用模板域名（防 301）
@@ -15,7 +17,7 @@ const SITE_ORIGIN = "https://www.guangyapan.com";
 const UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
 
-const SCRIPT_VERSION = "1.3.0";
+const SCRIPT_VERSION = "1.3.2";
 
 const POSITIONAL_ARG_KEYS = [
   "GUANGYA_REFRESH_TOKEN",
@@ -27,7 +29,8 @@ const POSITIONAL_ARG_KEYS = [
   "MAGNET_HOST",
   "MAGNET_FILTER",
   "MAGNET_BLOCK_PATTERNS",
-  "MAGNET_MIN_VIDEO_MB"
+  "MAGNET_MIN_VIDEO_MB",
+  "MAGNET_VIDEO_ONLY"
 ];
 
 const VIDEO_EXTS = {
@@ -366,18 +369,42 @@ function normalizeResolvedFileEntry(obj) {
   const name = chooseBestNameCandidate([
     obj.name, obj.fileName, obj.file_name, obj.filename,
     obj.path, obj.filePath, obj.file_path, obj.fullPath, obj.full_path,
+    obj.relativePath, obj.relative_path, obj.filePathName, obj.file_path_name,
     obj.resName, obj.resourceName, obj.title
   ]);
   const size = toFiniteNumberOrNull(
     obj.fileSize != null ? obj.fileSize :
     obj.file_size != null ? obj.file_size :
+    obj.filesize != null ? obj.filesize :
     obj.size != null ? obj.size :
-    obj.length
+    obj.length != null ? obj.length :
+    obj.len != null ? obj.len :
+    obj.bytes
   );
   return { index: index, name: name, size: size == null ? 0 : size, raw: obj };
 }
 
+function extractResolvedFileEntriesDirect(payload) {
+  const data = payload && payload.data;
+  if (!data || typeof data !== "object") return null;
+  const list = data.list || data.files || data.fileList || data.resList || data.items || data.fileInfos;
+  if (!Array.isArray(list) || !list.length) return null;
+  let entries = list.map(normalizeResolvedFileEntry).filter(Boolean);
+  entries = entries.filter(function (item, index, arr) {
+    return arr.findIndex(function (other) { return other.index === item.index; }) === index;
+  }).sort(function (a, b) { return a.index - b.index; });
+  return entries.length ? entries : null;
+}
+
+function preferNamedEntries(entries) {
+  const named = entries.filter(function (item) { return item.name; });
+  return named.length ? named : entries;
+}
+
 function extractResolvedFileEntries(payload) {
+  const direct = extractResolvedFileEntriesDirect(payload);
+  if (direct && direct.length) return preferNamedEntries(direct);
+
   const arrays = collectObjectArrays(payload);
   let best = [];
   let bestScore = -1;
@@ -418,7 +445,7 @@ function extractResolvedFileEntries(payload) {
     }
   }
 
-  if (best.length) return best;
+  if (best.length) return preferNamedEntries(best);
 
   const explicitIndexes = findFirstValueByKeys(payload, ["fileIndexes", "file_indexes", "indexes"]);
   if (Array.isArray(explicitIndexes) && explicitIndexes.length) {
@@ -486,11 +513,54 @@ function getMinVideoMb(cfg) {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-function shouldBlockMagnetFile(entry, patterns, minVideoMb) {
+function isVideoOnlyEnabled(cfg) {
+  return resolveVal(cfg.MAGNET_VIDEO_ONLY, "1") !== "0";
+}
+
+function isMultiPartVideoName(name) {
+  const n = String(name || "").toLowerCase();
+  return /(?:^|[\._\-])p(?:art)?[\._\-]?\d+(?:[\._\-]|$)/.test(n) ||
+    /(?:^|[\._\-])cd[\._\-]?\d+(?:[\._\-]|$)/.test(n) ||
+    /(?:^|[\._\-])disc[\._\-]?\d+(?:[\._\-]|$)/.test(n) ||
+    /(?:^|[\._\-])vol[\._\-]?\d+(?:[\._\-]|$)/.test(n) ||
+    /分段|第[\d一二三四五六七八九十]+[部分集段]/.test(n);
+}
+
+function applySmartVideoPrune(entries) {
+  const videos = entries.filter(function (item) { return isVideoFileName(item.name); });
+  const sized = videos.filter(function (item) { return Number(item.size) > 0; });
+  if (sized.length < 2) {
+    return { kept: entries, blocked: [] };
+  }
+  sized.sort(function (a, b) { return b.size - a.size; });
+  const maxSize = sized[0].size;
+  const threshold = maxSize * 0.15;
+  const kept = [];
+  const blocked = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (!isVideoFileName(entry.name)) {
+      kept.push(entry);
+      continue;
+    }
+    const size = Number(entry.size || 0);
+    if (size > 0 && size < threshold && !isMultiPartVideoName(entry.name)) {
+      blocked.push({ entry: entry, reason: "small-video" });
+    } else {
+      kept.push(entry);
+    }
+  }
+  return { kept: kept, blocked: blocked };
+}
+
+function shouldBlockMagnetFile(entry, patterns, minVideoMb, videoOnly) {
   const name = String(entry.name || "");
   if (name) {
     for (let i = 0; i < patterns.length; i++) {
       if (patterns[i].test(name)) return { blocked: true, reason: "pattern" };
+    }
+    if (videoOnly && !isVideoFileName(name)) {
+      return { blocked: true, reason: "non-video" };
     }
   }
   if (minVideoMb > 0 && name && isVideoFileName(name)) {
@@ -505,15 +575,31 @@ function shouldBlockMagnetFile(entry, patterns, minVideoMb) {
 function filterResolvedMagnetFiles(entries, cfg) {
   const patterns = parseBlockPatterns(cfg);
   const minVideoMb = getMinVideoMb(cfg);
-  const kept = [];
+  const videoOnly = isVideoOnlyEnabled(cfg);
+  let kept = [];
   const blocked = [];
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
-    const verdict = shouldBlockMagnetFile(entry, patterns, minVideoMb);
+    const verdict = shouldBlockMagnetFile(entry, patterns, minVideoMb, videoOnly);
     if (verdict.blocked) blocked.push({ entry: entry, reason: verdict.reason });
     else kept.push(entry);
   }
-  return { kept: kept, blocked: blocked, patterns: patterns, minVideoMb: minVideoMb };
+  const pruned = applySmartVideoPrune(kept);
+  kept = pruned.kept;
+  for (let j = 0; j < pruned.blocked.length; j++) blocked.push(pruned.blocked[j]);
+  return { kept: kept, blocked: blocked, patterns: patterns, minVideoMb: minVideoMb, videoOnly: videoOnly };
+}
+
+function formatFilePreview(entries, limit) {
+  const max = limit || 8;
+  const lines = [];
+  for (let i = 0; i < entries.length && i < max; i++) {
+    const item = entries[i];
+    const label = item.name || ("#" + item.index);
+    lines.push(htmlEscape(label));
+  }
+  if (entries.length > max) lines.push("… 另有 " + (entries.length - max) + " 个");
+  return lines.join("<br>");
 }
 
 function formatBlockedPreview(blocked, limit) {
@@ -522,7 +608,10 @@ function formatBlockedPreview(blocked, limit) {
   for (let i = 0; i < blocked.length && i < max; i++) {
     const item = blocked[i];
     const label = item.entry.name || ("#" + item.entry.index);
-    lines.push(label + (item.reason === "size" ? " (过小)" : ""));
+    const tag = item.reason === "size" ? " (过小)" :
+      item.reason === "small-video" ? " (小体积广告)" :
+      item.reason === "non-video" ? " (非视频)" : "";
+    lines.push(htmlEscape(label + tag));
   }
   if (blocked.length > max) lines.push("… 另有 " + (blocked.length - max) + " 个");
   return lines.join("<br>");
@@ -587,7 +676,9 @@ async function resolveGuangyaResource(token, did, url) {
 
 async function createGuangyaTask(token, did, magnet, parentId, fileIndexes) {
   const body = { url: magnet, parentId: parentId || "" };
-  if (fileIndexes && fileIndexes.length) body.fileIndexes = fileIndexes;
+  if (fileIndexes && fileIndexes.length) {
+    body.fileIndexes = fileIndexes.map(function (idx) { return Number(idx); });
+  }
   return httpPost(
     API_BASE + "/nd.bizcloudcollection.s/v1/create_task",
     apiHeaders(token, did),
@@ -705,10 +796,15 @@ if (req.host !== host) {
           return;
         }
         fileIndexes = filtered.kept.map(function (item) { return item.index; });
-        filterSummary = "<p>已解析 " + entries.length + " 个文件，提交 " + fileIndexes.length +
+        filterSummary = "<p style=\"font-size:12px;color:#71717a\">脚本版本 " + SCRIPT_VERSION + "</p>" +
+          "<p>已解析 " + entries.length + " 个文件，提交 " + fileIndexes.length +
           " 个，拦截 " + filtered.blocked.length + " 个。</p>";
+        if (filtered.kept.length) {
+          filterSummary += "<p style=\"font-size:13px;color:#a1a1aa\">将下载：<br>" +
+            formatFilePreview(filtered.kept) + "</p>";
+        }
         if (filtered.blocked.length) {
-          filterSummary += "<p style=\"font-size:13px;color:#a1a1aa\">拦截示例：<br>" +
+          filterSummary += "<p style=\"font-size:13px;color:#a1a1aa\">已拦截：<br>" +
             formatBlockedPreview(filtered.blocked) + "</p>";
         }
       }
@@ -720,9 +816,10 @@ if (req.host !== host) {
         respondLocal(200, {}, htmlPage("导入成功", "<h1>已提交光鸭云下载</h1>" +
           (filterEnabled
             ? filterSummary
-            : "<p>未启用文件过滤（全量下载）。</p>") +
-          "<p>请到光鸭 App / 网页「云下载」查看进度。</p>" +
-          "<a class=\"btn\" href=\"javascript:history.back()\">返回</a>"));
+            : "<p style=\"font-size:12px;color:#71717a\">脚本版本 " + SCRIPT_VERSION + "</p>" +
+              "<p>未启用文件过滤（全量下载）。</p>") +
+          "<p>任务已提交，请自行打开光鸭 App 或网页「云下载」查看进度。</p>" +
+          "<a class=\"btn\" href=\"javascript:history.back()\">返回上一页</a>"));
       } else {
         respondLocal(200, {}, htmlPage("导入失败", "<h1>光鸭返回异常</h1><p>" + htmlEscape(msg) + "</p>" +
           "<a class=\"btn\" href=\"javascript:history.back()\">返回</a>"));
