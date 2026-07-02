@@ -1,8 +1,8 @@
 /**
  * Egern / Surge — http-request
- * @version 1.3.2
+ * @version 1.3.3
  * @changelog
- *   1.3.2 - 成功页停留不跳转；KeepShare 入口改由 keepshare-page-intercept 转发至本脚本
+ *   1.3.3 - KeepShare 恢复同域内联提交（egern-magnet.local 在 Egern 浏览器内不可用）
  *   1.3.1 - 增强 resolve 解析；默认仅保留视频；按体积剔除小广告片；成功页显示版本号
  *   1.3.0 - 光鸭导入前先 resolve_res，按规则过滤广告/ junk 后仅提交 fileIndexes
  *   1.2.4 - 模块参数改为逗号分隔 positional（参考 trakt sgmodule）
@@ -17,7 +17,7 @@ const SITE_ORIGIN = "https://www.guangyapan.com";
 const UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
 
-const SCRIPT_VERSION = "1.3.2";
+const SCRIPT_VERSION = "1.3.3";
 
 const POSITIONAL_ARG_KEYS = [
   "GUANGYA_REFRESH_TOKEN",
@@ -775,37 +775,43 @@ if (req.host !== host) {
       let filterSummary = "";
 
       if (filterEnabled) {
-        const resolved = await resolveGuangyaResource(token, did, magnet);
-        if (!isApiSuccess(resolved)) {
-          throw new Error((resolved && (resolved.msg || resolved.message)) || "解析磁力文件列表失败");
-        }
-        const entries = extractResolvedFileEntries(resolved);
-        if (!entries.length) {
-          throw new Error("无法从 resolve_res 获取文件列表，请设置 MAGNET_FILTER=0 关闭过滤后重试");
-        }
-        const filtered = filterResolvedMagnetFiles(entries, cfg);
-        if (!filtered.kept.length) {
-          respondLocal(200, {}, htmlPage("全部被过滤", "<h1>没有可下载的文件</h1>" +
-            "<p>共解析 " + entries.length + " 个文件，均被拦截规则命中。</p>" +
-            (filtered.blocked.length
-              ? "<p style=\"font-size:13px;color:#a1a1aa\">已拦截示例：<br>" +
-                formatBlockedPreview(filtered.blocked) + "</p>"
-              : "") +
-            "<p>可在模块参数调整 MAGNET_BLOCK_PATTERNS 或 MAGNET_MIN_VIDEO_MB，或设置 MAGNET_FILTER=0 关闭过滤。</p>" +
-            "<a class=\"btn\" href=\"javascript:history.back()\">返回</a>"));
-          return;
-        }
-        fileIndexes = filtered.kept.map(function (item) { return item.index; });
-        filterSummary = "<p style=\"font-size:12px;color:#71717a\">脚本版本 " + SCRIPT_VERSION + "</p>" +
-          "<p>已解析 " + entries.length + " 个文件，提交 " + fileIndexes.length +
-          " 个，拦截 " + filtered.blocked.length + " 个。</p>";
-        if (filtered.kept.length) {
-          filterSummary += "<p style=\"font-size:13px;color:#a1a1aa\">将下载：<br>" +
-            formatFilePreview(filtered.kept) + "</p>";
-        }
-        if (filtered.blocked.length) {
-          filterSummary += "<p style=\"font-size:13px;color:#a1a1aa\">已拦截：<br>" +
-            formatBlockedPreview(filtered.blocked) + "</p>";
+        try {
+          const resolved = await resolveGuangyaResource(token, did, magnet);
+          if (!isApiSuccess(resolved)) {
+            throw new Error((resolved && (resolved.msg || resolved.message)) || "解析磁力文件列表失败");
+          }
+          const entries = extractResolvedFileEntries(resolved);
+          if (!entries.length) {
+            throw new Error("无法识别文件列表");
+          }
+          const filtered = filterResolvedMagnetFiles(entries, cfg);
+          if (!filtered.kept.length) {
+            respondLocal(200, {}, htmlPage("全部被过滤", "<h1>没有可下载的文件</h1>" +
+              "<p>共解析 " + entries.length + " 个文件，均被拦截规则命中。</p>" +
+              (filtered.blocked.length
+                ? "<p style=\"font-size:13px;color:#a1a1aa\">已拦截示例：<br>" +
+                  formatBlockedPreview(filtered.blocked) + "</p>"
+                : "") +
+              "<p>可在模块参数调整 MAGNET_BLOCK_PATTERNS 或 MAGNET_MIN_VIDEO_MB，或设置 MAGNET_FILTER=0 关闭过滤。</p>" +
+              "<a class=\"btn\" href=\"javascript:history.back()\">返回</a>"));
+            return;
+          }
+          fileIndexes = filtered.kept.map(function (item) { return item.index; });
+          filterSummary = "<p style=\"font-size:12px;color:#71717a\">脚本版本 " + SCRIPT_VERSION + "</p>" +
+            "<p>已解析 " + entries.length + " 个文件，提交 " + fileIndexes.length +
+            " 个，拦截 " + filtered.blocked.length + " 个。</p>";
+          if (filtered.kept.length) {
+            filterSummary += "<p style=\"font-size:13px;color:#a1a1aa\">将下载：<br>" +
+              formatFilePreview(filtered.kept) + "</p>";
+          }
+          if (filtered.blocked.length) {
+            filterSummary += "<p style=\"font-size:13px;color:#a1a1aa\">已拦截：<br>" +
+              formatBlockedPreview(filtered.blocked) + "</p>";
+          }
+        } catch (filterErr) {
+          filterSummary = "<p style=\"font-size:12px;color:#71717a\">脚本版本 " + SCRIPT_VERSION + "</p>" +
+            "<p style=\"color:#fbbf24\">过滤解析失败，已改为全量提交：" + htmlEscape(filterErr.message || filterErr) + "</p>";
+          fileIndexes = null;
         }
       }
 

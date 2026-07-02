@@ -1,8 +1,9 @@
 /**
  * Egern / Surge — http-request
  * KeepShare 磁力页：请求发出前拦截；按钮走同域 ?egern= 动作（避免 egern-magnet.local 无效）
- * @version 1.3.2
+ * @version 1.3.3
  * @changelog
+ *   1.3.3 - 恢复 KeepShare 同域 ?egern=guangya 内联提交（egern-magnet.local 在 Egern 内无效）；内联过滤
  *   1.3.2 - 光鸭按钮改走 egern-magnet.local/guangya（复用过滤脚本）；去掉成功后自动跳转 App
  *   1.2.4 - 模块参数改为逗号分隔 positional（参考 trakt sgmodule）
  *   1.2.3 - 读取 Egern ctx.env；增强 $argument 解析与 gy. 扫描
@@ -15,12 +16,10 @@ const CLIENT_ID = "aMe-8VSlkrbQXpUR";
 const ACCOUNT_URL = "https://account.guangyapan.com";
 const API_BASE = "https://api.guangyapan.com";
 const SITE_ORIGIN = "https://www.guangyapan.com";
-const GUANGYA_APP_URL = "https://app.guangyapan.com/pan";
-const DEFAULT_MAGNET_HOST = "egern-magnet.local";
 const UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
 
-const SCRIPT_VERSION = "1.3.2";
+const SCRIPT_VERSION = "1.3.3";
 
 /** 与 Magnet-Guangya.sgmodule argument= 占位符顺序一致 */
 const POSITIONAL_ARG_KEYS = [
@@ -30,7 +29,22 @@ const POSITIONAL_ARG_KEYS = [
   "ENABLE_115",
   "ENABLE_PIKPAK",
   "ENABLE_GUANGYA",
-  "MAGNET_HOST"
+  "MAGNET_HOST",
+  "MAGNET_FILTER",
+  "MAGNET_BLOCK_PATTERNS",
+  "MAGNET_MIN_VIDEO_MB",
+  "MAGNET_VIDEO_ONLY"
+];
+
+const VIDEO_EXTS = {
+  mp4: 1, mkv: 1, avi: 1, wmv: 1, mov: 1, m4v: 1,
+  ts: 1, flv: 1, rmvb: 1, webm: 1, "3gp": 1
+};
+
+const DEFAULT_BLOCK_PATTERN_SOURCES = [
+  "广告|推广|宣传|加群|更多资源|最新地址|影视大站|1024|91\\.tv|草榴",
+  "sample|preview|trailer|预告|预览|样片|精彩花絮",
+  "\\.(txt|url|nfo|htm|html|jpg|jpeg|png|gif|exe|apk|torrent)$"
 ];
 
 const TOKEN_KEYS = [
@@ -130,7 +144,7 @@ function parseModuleArgString(raw) {
     }
   }
 
-  const MODULE_ARG_KEYS = POSITIONAL_ARG_KEYS.concat(["MAGNET_HOST"]);
+  const MODULE_ARG_KEYS = POSITIONAL_ARG_KEYS.slice();
   MODULE_ARG_KEYS.forEach(function (key) {
     const marker = key + "=";
     const idx = s.indexOf(marker);
@@ -296,19 +310,6 @@ function htmlPage(title, bodyHtml) {
     ".btn-secondary{background:#3b82f6}</style></head><body><div class=\"card\">" + bodyHtml + "</div></body></html>";
 }
 
-function resolveMagnetHost(cfg) {
-  const candidates = [cfg && cfg.MAGNET_HOST, cfg && cfg.magnet_host];
-  for (let i = 0; i < candidates.length; i++) {
-    const v = String(candidates[i] || "").trim();
-    if (v && v.indexOf("{{") === -1 && v.indexOf("}}") === -1) return v;
-  }
-  return DEFAULT_MAGNET_HOST;
-}
-
-function buildGuangyaImportUrl(magnet, cfg) {
-  return "http://" + resolveMagnetHost(cfg) + "/guangya?magnet=" + encodeURIComponent(magnet);
-}
-
 function buildActionUrl(reqUrl, action) {
   try {
     const u = new URL(reqUrl.split("#")[0]);
@@ -336,7 +337,7 @@ function buildMagnetPage(magnet, cfg, reqUrl) {
   }
   if (showGuangya) {
     buttons += "<a class=\"btn btn-green btn-guangya\" href=\"" +
-      htmlEscape(buildGuangyaImportUrl(magnet, cfg)) + "\">光鸭云盘 · 一键导入</a>";
+      htmlEscape(buildActionUrl(reqUrl, "guangya")) + "\">光鸭云盘 · 一键导入</a>";
   }
 
   return "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">" +
@@ -394,6 +395,478 @@ function parseEgernAction(url) {
   }
 }
 
+function httpPost(url, headers, bodyObj, timeoutMs) {
+  return new Promise(function (resolve, reject) {
+    $httpClient.post({
+      url: url,
+      headers: headers,
+      body: JSON.stringify(bodyObj),
+      timeout: timeoutMs || 25
+    }, function (err, resp, data) {
+      if (err) return reject(err);
+      try {
+        resolve(typeof data === "string" ? JSON.parse(data) : data);
+      } catch (e) {
+        reject(new Error("JSON parse failed: " + String(data).slice(0, 200)));
+      }
+    });
+  });
+}
+
+function isApiSuccess(result) {
+  return !!(result && (result.msg === "success" || result.code === 0 || result.data));
+}
+
+function toFiniteNumberOrNull(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function chooseBestNameCandidate(values) {
+  for (let i = 0; i < values.length; i++) {
+    const s = String(values[i] || "").trim();
+    if (s) return s;
+  }
+  return "";
+}
+
+function collectObjectArrays(node, out, seen) {
+  out = out || [];
+  seen = seen || (typeof WeakSet !== "undefined" ? new WeakSet() : null);
+  if (!node || typeof node !== "object") return out;
+  if (seen && seen.has(node)) return out;
+  if (seen) seen.add(node);
+  if (Array.isArray(node)) {
+    if (node.length && node.every(function (item) {
+      return item && typeof item === "object" && !Array.isArray(item);
+    })) out.push(node);
+    for (let i = 0; i < node.length; i++) collectObjectArrays(node[i], out, seen);
+    return out;
+  }
+  const keys = Object.keys(node);
+  for (let i = 0; i < keys.length; i++) collectObjectArrays(node[keys[i]], out, seen);
+  return out;
+}
+
+function findFirstValueByKeys(node, keys, seen) {
+  seen = seen || (typeof WeakSet !== "undefined" ? new WeakSet() : null);
+  if (!node || typeof node !== "object") return null;
+  if (seen && seen.has(node)) return null;
+  if (seen) seen.add(node);
+  for (let i = 0; i < keys.length; i++) {
+    if (Object.prototype.hasOwnProperty.call(node, keys[i])) return node[keys[i]];
+  }
+  if (Array.isArray(node)) {
+    for (let i = 0; i < node.length; i++) {
+      const found = findFirstValueByKeys(node[i], keys, seen);
+      if (found != null) return found;
+    }
+    return null;
+  }
+  const objKeys = Object.keys(node);
+  for (let j = 0; j < objKeys.length; j++) {
+    const found = findFirstValueByKeys(node[objKeys[j]], keys, seen);
+    if (found != null) return found;
+  }
+  return null;
+}
+
+function normalizeResolvedFileEntry(obj) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
+  const index = toFiniteNumberOrNull(
+    obj.fileIndex != null ? obj.fileIndex :
+    obj.file_index != null ? obj.file_index :
+    obj.index != null ? obj.index :
+    obj.idx != null ? obj.idx :
+    obj.fileNo != null ? obj.fileNo :
+    obj.file_no != null ? obj.file_no :
+    obj.seq
+  );
+  if (index == null || index < 0) return null;
+  const name = chooseBestNameCandidate([
+    obj.name, obj.fileName, obj.file_name, obj.filename,
+    obj.path, obj.filePath, obj.file_path, obj.fullPath, obj.full_path,
+    obj.relativePath, obj.relative_path, obj.filePathName, obj.file_path_name,
+    obj.resName, obj.resourceName, obj.title
+  ]);
+  const size = toFiniteNumberOrNull(
+    obj.fileSize != null ? obj.fileSize :
+    obj.file_size != null ? obj.file_size :
+    obj.filesize != null ? obj.filesize :
+    obj.size != null ? obj.size :
+    obj.length != null ? obj.length :
+    obj.len != null ? obj.len :
+    obj.bytes
+  );
+  return { index: index, name: name, size: size == null ? 0 : size, raw: obj };
+}
+
+function extractResolvedFileEntriesDirect(payload) {
+  const data = payload && payload.data;
+  if (!data || typeof data !== "object") return null;
+  const list = data.list || data.files || data.fileList || data.resList || data.items || data.fileInfos;
+  if (!Array.isArray(list) || !list.length) return null;
+  let entries = list.map(normalizeResolvedFileEntry).filter(Boolean);
+  entries = entries.filter(function (item, index, arr) {
+    return arr.findIndex(function (other) { return other.index === item.index; }) === index;
+  }).sort(function (a, b) { return a.index - b.index; });
+  return entries.length ? entries : null;
+}
+
+function preferNamedEntries(entries) {
+  const named = entries.filter(function (item) { return item.name; });
+  return named.length ? named : entries;
+}
+
+function extractResolvedFileEntries(payload) {
+  const direct = extractResolvedFileEntriesDirect(payload);
+  if (direct && direct.length) return preferNamedEntries(direct);
+  const arrays = collectObjectArrays(payload);
+  let best = [];
+  let bestScore = -1;
+  for (let a = 0; a < arrays.length; a++) {
+    const arr = arrays[a];
+    let entries = arr.map(normalizeResolvedFileEntry).filter(Boolean);
+    entries = entries.filter(function (item, index, list) {
+      return list.findIndex(function (other) { return other.index === item.index; }) === index;
+    }).sort(function (x, y) { return x.index - y.index; });
+    if (!entries.length) {
+      const positional = [];
+      for (let i = 0; i < arr.length; i++) {
+        const name = chooseBestNameCandidate([
+          arr[i] && arr[i].name, arr[i] && arr[i].fileName, arr[i] && arr[i].file_name,
+          arr[i] && arr[i].filename, arr[i] && arr[i].path, arr[i] && arr[i].filePath,
+          arr[i] && arr[i].file_path, arr[i] && arr[i].fullPath, arr[i] && arr[i].full_path,
+          arr[i] && arr[i].resName, arr[i] && arr[i].resourceName, arr[i] && arr[i].title
+        ]);
+        if (!name) continue;
+        positional.push({
+          index: i, name: name,
+          size: toFiniteNumberOrNull(arr[i] && (arr[i].fileSize || arr[i].size)) || 0,
+          raw: arr[i]
+        });
+      }
+      if (positional.length) entries = positional;
+    }
+    if (!entries.length) continue;
+    const nameCount = entries.filter(function (item) { return item.name; }).length;
+    const score = entries.length * 10 + nameCount * 3 + (entries.length > 1 ? 5 : 0);
+    if (score > bestScore) { best = entries; bestScore = score; }
+  }
+  if (best.length) return preferNamedEntries(best);
+  const explicitIndexes = findFirstValueByKeys(payload, ["fileIndexes", "file_indexes", "indexes"]);
+  if (Array.isArray(explicitIndexes) && explicitIndexes.length) {
+    return explicitIndexes.map(function (value) { return toFiniteNumberOrNull(value); })
+      .filter(function (value) { return value != null; })
+      .filter(function (value, index, list) { return list.indexOf(value) === index; })
+      .sort(function (x, y) { return x - y; })
+      .map(function (index) { return { index: index, name: "", size: 0, raw: null }; });
+  }
+  const total = toFiniteNumberOrNull(findFirstValueByKeys(payload, [
+    "fileCount", "file_count", "totalCount", "total_count", "count", "total"
+  ]));
+  if (total != null && total > 0) {
+    const out = [];
+    for (let i = 0; i < total; i++) out.push({ index: i, name: "", size: 0, raw: null });
+    return out;
+  }
+  return [];
+}
+
+function parseRegexPatternSource(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return null;
+  if (s.charAt(0) === "/") {
+    const last = s.lastIndexOf("/");
+    if (last > 0) {
+      try { return new RegExp(s.slice(1, last), s.slice(last + 1) || "i"); } catch (e) { /* fall through */ }
+    }
+  }
+  try { return new RegExp(s, "i"); } catch (e) { return null; }
+}
+
+function parseBlockPatterns(cfg) {
+  const raw = resolveVal(cfg.MAGNET_BLOCK_PATTERNS, "");
+  const sources = raw
+    ? raw.split(/[;|]/).map(function (s) { return String(s || "").trim(); }).filter(Boolean)
+    : DEFAULT_BLOCK_PATTERN_SOURCES.slice();
+  const patterns = [];
+  for (let i = 0; i < sources.length; i++) {
+    const re = parseRegexPatternSource(sources[i]);
+    if (re) patterns.push(re);
+  }
+  return patterns;
+}
+
+function isVideoFileName(name) {
+  const parts = String(name || "").split(".");
+  if (parts.length < 2) return false;
+  return !!VIDEO_EXTS[parts.pop().toLowerCase()];
+}
+
+function isMagnetFilterEnabled(cfg) {
+  return resolveVal(cfg.MAGNET_FILTER, "1") !== "0";
+}
+
+function getMinVideoMb(cfg) {
+  const n = Number(resolveVal(cfg.MAGNET_MIN_VIDEO_MB, "80"));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function isVideoOnlyEnabled(cfg) {
+  return resolveVal(cfg.MAGNET_VIDEO_ONLY, "1") !== "0";
+}
+
+function isMultiPartVideoName(name) {
+  const n = String(name || "").toLowerCase();
+  return /(?:^|[\._\-])p(?:art)?[\._\-]?\d+(?:[\._\-]|$)/.test(n) ||
+    /(?:^|[\._\-])cd[\._\-]?\d+(?:[\._\-]|$)/.test(n) ||
+    /(?:^|[\._\-])disc[\._\-]?\d+(?:[\._\-]|$)/.test(n) ||
+    /(?:^|[\._\-])vol[\._\-]?\d+(?:[\._\-]|$)/.test(n) ||
+    /分段|第[\d一二三四五六七八九十]+[部分集段]/.test(n);
+}
+
+function applySmartVideoPrune(entries) {
+  const videos = entries.filter(function (item) { return isVideoFileName(item.name); });
+  const sized = videos.filter(function (item) { return Number(item.size) > 0; });
+  if (sized.length < 2) return { kept: entries, blocked: [] };
+  sized.sort(function (a, b) { return b.size - a.size; });
+  const threshold = sized[0].size * 0.15;
+  const kept = [];
+  const blocked = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (!isVideoFileName(entry.name)) { kept.push(entry); continue; }
+    const size = Number(entry.size || 0);
+    if (size > 0 && size < threshold && !isMultiPartVideoName(entry.name)) {
+      blocked.push({ entry: entry, reason: "small-video" });
+    } else kept.push(entry);
+  }
+  return { kept: kept, blocked: blocked };
+}
+
+function shouldBlockMagnetFile(entry, patterns, minVideoMb, videoOnly) {
+  const name = String(entry.name || "");
+  if (name) {
+    for (let i = 0; i < patterns.length; i++) {
+      if (patterns[i].test(name)) return { blocked: true, reason: "pattern" };
+    }
+    if (videoOnly && !isVideoFileName(name)) return { blocked: true, reason: "non-video" };
+  }
+  if (minVideoMb > 0 && name && isVideoFileName(name)) {
+    const size = Number(entry.size || 0);
+    if (size > 0 && size < minVideoMb * 1024 * 1024) return { blocked: true, reason: "size" };
+  }
+  return { blocked: false, reason: "" };
+}
+
+function filterResolvedMagnetFiles(entries, cfg) {
+  const patterns = parseBlockPatterns(cfg);
+  const minVideoMb = getMinVideoMb(cfg);
+  const videoOnly = isVideoOnlyEnabled(cfg);
+  let kept = [];
+  const blocked = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const verdict = shouldBlockMagnetFile(entry, patterns, minVideoMb, videoOnly);
+    if (verdict.blocked) blocked.push({ entry: entry, reason: verdict.reason });
+    else kept.push(entry);
+  }
+  const pruned = applySmartVideoPrune(kept);
+  kept = pruned.kept;
+  for (let j = 0; j < pruned.blocked.length; j++) blocked.push(pruned.blocked[j]);
+  return { kept: kept, blocked: blocked };
+}
+
+function formatFilePreview(entries, limit) {
+  const max = limit || 8;
+  const lines = [];
+  for (let i = 0; i < entries.length && i < max; i++) {
+    const item = entries[i];
+    lines.push(htmlEscape(item.name || ("#" + item.index)));
+  }
+  if (entries.length > max) lines.push("… 另有 " + (entries.length - max) + " 个");
+  return lines.join("<br>");
+}
+
+function formatBlockedPreview(blocked, limit) {
+  const max = limit || 8;
+  const lines = [];
+  for (let i = 0; i < blocked.length && i < max; i++) {
+    const item = blocked[i];
+    const label = item.entry.name || ("#" + item.entry.index);
+    const tag = item.reason === "size" ? " (过小)" :
+      item.reason === "small-video" ? " (小体积广告)" :
+      item.reason === "non-video" ? " (非视频)" : "";
+    lines.push(htmlEscape(label + tag));
+  }
+  if (blocked.length > max) lines.push("… 另有 " + (blocked.length - max) + " 个");
+  return lines.join("<br>");
+}
+
+function accountHeaders(did) {
+  return {
+    accept: "*/*",
+    "content-type": "application/json",
+    origin: SITE_ORIGIN,
+    referer: SITE_ORIGIN + "/",
+    "user-agent": UA,
+    "x-client-id": CLIENT_ID,
+    "x-client-version": "0.0.1",
+    "x-device-id": did,
+    "x-device-model": "iphone%2F18.0",
+    "x-device-name": "iPhone",
+    "x-device-sign": "wdi10." + did + randomHex(32),
+    "x-net-work-type": "NONE",
+    "x-os-version": "iPhone OS 18.0",
+    "x-platform-version": "1",
+    "x-protocol-version": "301",
+    "x-provider-name": "NONE",
+    "x-sdk-version": "9.0.2",
+    "x-action": "401"
+  };
+}
+
+function apiHeaders(token, did) {
+  return {
+    accept: "application/json, text/plain, */*",
+    authorization: "Bearer " + token,
+    "content-type": "application/json",
+    did: did,
+    dt: "4",
+    origin: SITE_ORIGIN,
+    referer: SITE_ORIGIN + "/",
+    "user-agent": UA
+  };
+}
+
+async function refreshAccessToken(refreshToken, did) {
+  const data = await httpPost(
+    ACCOUNT_URL + "/v1/auth/token",
+    accountHeaders(did),
+    { client_id: CLIENT_ID, grant_type: "refresh_token", refresh_token: refreshToken }
+  );
+  if (!data || !data.access_token) {
+    throw new Error((data && (data.error_description || data.msg)) || "刷新 token 失败");
+  }
+  return data.access_token;
+}
+
+async function resolveGuangyaResource(token, did, url) {
+  return httpPost(
+    API_BASE + "/nd.bizcloudcollection.s/v1/resolve_res",
+    apiHeaders(token, did),
+    { url: url },
+    45
+  );
+}
+
+async function createGuangyaTask(token, did, magnet, parentId, fileIndexes) {
+  const body = { url: magnet, parentId: parentId || "" };
+  if (fileIndexes && fileIndexes.length) {
+    body.fileIndexes = fileIndexes.map(function (idx) { return Number(idx); });
+  }
+  return httpPost(
+    API_BASE + "/nd.bizcloudcollection.s/v1/create_task",
+    apiHeaders(token, did),
+    body,
+    30
+  );
+}
+
+function buildBackUrl(reqUrl) {
+  try {
+    const u = new URL(reqUrl.split("#")[0]);
+    u.searchParams.delete("egern");
+    return u.toString();
+  } catch (e) {
+    return "";
+  }
+}
+
+function handleGuangya(magnet, cfg, reqUrl) {
+  const argRaw = typeof $argument !== "undefined" ? String($argument || "") : "";
+  const refresh = getRefreshToken(cfg, argRaw);
+  const backUrl = buildBackUrl(reqUrl);
+
+  if (!refresh) {
+    respondLocal(200, {}, htmlPage("未配置 Token", "<h1>未配置光鸭 Refresh Token</h1>" +
+      "<p><b>Egern 请二选一：</b></p>" +
+      "<p>1. 模块 → 本模块 → <b>参数</b> → 填写 <code>GUANGYA_REFRESH_TOKEN</code></p>" +
+      "<p>2. 脚本 → 磁力拦截-KeepShare → <b>环境变量 env</b> → 键名 <code>GUANGYA_REFRESH_TOKEN</code></p>" +
+      "<p style=\"font-size:12px;color:#a1a1aa\">" + htmlEscape(tokenDiagnostic(cfg)) + "</p>" +
+      (backUrl ? "<a class=\"btn btn-secondary\" href=\"" + htmlEscape(backUrl) + "\">返回</a>" : "")));
+    return;
+  }
+
+  (async function () {
+    try {
+      const did = cfg.GUANGYA_DID || randomHex(32);
+      const token = await refreshAccessToken(refresh, did);
+      const parentId = cfg.GUANGYA_PARENT_ID || "";
+      const filterEnabled = isMagnetFilterEnabled(cfg);
+      let fileIndexes = null;
+      let filterSummary = "";
+
+      if (filterEnabled) {
+        try {
+          const resolved = await resolveGuangyaResource(token, did, magnet);
+          if (!isApiSuccess(resolved)) {
+            throw new Error((resolved && (resolved.msg || resolved.message)) || "解析磁力文件列表失败");
+          }
+          const entries = extractResolvedFileEntries(resolved);
+          if (!entries.length) {
+            throw new Error("无法识别文件列表");
+          }
+          const filtered = filterResolvedMagnetFiles(entries, cfg);
+          if (!filtered.kept.length) {
+            respondLocal(200, {}, htmlPage("全部被过滤", "<h1>没有可下载的文件</h1>" +
+              "<p>共解析 " + entries.length + " 个文件，均被拦截规则命中。</p>" +
+              (filtered.blocked.length
+                ? "<p style=\"font-size:13px;color:#a1a1aa\">已拦截：<br>" + formatBlockedPreview(filtered.blocked) + "</p>"
+                : "") +
+              "<p>可在模块参数调整 MAGNET_BLOCK_PATTERNS 或 MAGNET_MIN_VIDEO_MB，或设置 MAGNET_FILTER=0。</p>" +
+              (backUrl ? "<a class=\"btn btn-secondary\" href=\"" + htmlEscape(backUrl) + "\">返回</a>" : "")));
+            return;
+          }
+          fileIndexes = filtered.kept.map(function (item) { return item.index; });
+          filterSummary = "<p style=\"font-size:12px;color:#71717a\">脚本版本 " + SCRIPT_VERSION + "</p>" +
+            "<p>已解析 " + entries.length + " 个文件，提交 " + fileIndexes.length +
+            " 个，拦截 " + filtered.blocked.length + " 个。</p>";
+          if (filtered.kept.length) {
+            filterSummary += "<p style=\"font-size:13px;color:#a1a1aa\">将下载：<br>" + formatFilePreview(filtered.kept) + "</p>";
+          }
+          if (filtered.blocked.length) {
+            filterSummary += "<p style=\"font-size:13px;color:#a1a1aa\">已拦截：<br>" + formatBlockedPreview(filtered.blocked) + "</p>";
+          }
+        } catch (filterErr) {
+          filterSummary = "<p style=\"font-size:12px;color:#71717a\">脚本版本 " + SCRIPT_VERSION + "</p>" +
+            "<p style=\"color:#fbbf24\">过滤解析失败，已改为全量提交：" + htmlEscape(filterErr.message || filterErr) + "</p>";
+          fileIndexes = null;
+        }
+      }
+
+      const result = await createGuangyaTask(token, did, magnet, parentId, fileIndexes);
+      const ok = isApiSuccess(result);
+      const msg = (result && result.msg) || JSON.stringify(result);
+      if (ok) {
+        respondLocal(200, {}, htmlPage("导入成功", "<h1>已提交光鸭云下载</h1>" +
+          (filterEnabled
+            ? filterSummary
+            : "<p style=\"font-size:12px;color:#71717a\">脚本版本 " + SCRIPT_VERSION + "</p><p>未启用文件过滤（全量下载）。</p>") +
+          "<p>任务已提交，请自行打开光鸭 App 或网页「云下载」查看进度。</p>" +
+          (backUrl ? "<a class=\"btn btn-secondary\" href=\"" + htmlEscape(backUrl) + "\">返回操作页</a>" : "")));
+      } else {
+        respondLocal(200, {}, htmlPage("导入失败", "<h1>光鸭返回异常</h1><p>" + htmlEscape(msg) + "</p>" +
+          (backUrl ? "<a class=\"btn btn-secondary\" href=\"" + htmlEscape(backUrl) + "\">返回</a>" : "")));
+      }
+    } catch (e) {
+      respondLocal(200, {}, htmlPage("请求失败", "<h1>调用光鸭 API 失败</h1><p>" + htmlEscape(e.message || e) + "</p>" +
+        (backUrl ? "<a class=\"btn btn-secondary\" href=\"" + htmlEscape(backUrl) + "\">返回</a>" : "")));
+    }
+  })();
+}
+
 const cfg = decodeArg();
 const reqUrl = String($request.url || "");
 
@@ -414,7 +887,7 @@ if (!/keepshare\.(?:org|cc)/i.test(reqUrl) || !/magnet/i.test(reqUrl)) {
         "https://mypikpak.com/drive/all?action=add_magnet&url=" + encodeURIComponent(magnet)
       );
     } else if (action === "guangya") {
-      respondRedirect(buildGuangyaImportUrl(magnet, cfg));
+      handleGuangya(magnet, cfg, reqUrl);
     } else {
       respondLocal(200, {}, buildMagnetPage(magnet, cfg, reqUrl));
     }
