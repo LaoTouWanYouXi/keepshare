@@ -1,8 +1,9 @@
 /**
  * Egern / Surge — http-request
  * KeepShare 磁力页：请求发出前拦截；按钮走同域 ?egern= 动作（避免 egern-magnet.local 无效）
- * @version 1.3.4
+ * @version 1.3.5
  * @changelog
+ *   1.3.5 - 不再丢弃无文件名的正片；多视频时只保留最大正片；补充直播/社區类广告规则
  *   1.3.4 - 收紧拦截规则，保留最大正片；修复 1024/videoOnly/80MB 误杀正片
  *   1.3.3 - 恢复 KeepShare 同域 ?egern=guangya 内联提交（egern-magnet.local 在 Egern 内无效）；内联过滤
  *   1.3.2 - 光鸭按钮改走 egern-magnet.local/guangya（复用过滤脚本）；去掉成功后自动跳转 App
@@ -20,7 +21,7 @@ const SITE_ORIGIN = "https://www.guangyapan.com";
 const UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
 
-const SCRIPT_VERSION = "1.3.4";
+const SCRIPT_VERSION = "1.3.5";
 
 /** 与 Magnet-Guangya.sgmodule argument= 占位符顺序一致 */
 const POSITIONAL_ARG_KEYS = [
@@ -43,7 +44,7 @@ const VIDEO_EXTS = {
 };
 
 const DEFAULT_BLOCK_PATTERN_SOURCES = [
-  "广告|推广|宣传|加群|更多资源|最新地址|影视大站|草榴|91porn|91\\.tv|1024\\.org|1024la",
+  "广告|推广|宣传|加群|更多资源|最新地址|影视大站|草榴|91porn|91\\.tv|1024\\.org|1024la|直播|社[區区]|情[報报]|信誉|uu美少女",
   "(?:^|[/\\\\_.\\-\\s])(?:sample|preview|trailer|预告|预览|样片|精彩花絮)(?:[/\\\\_.\\-\\s]|\\.|$)",
   "\\.(txt|url|nfo|htm|html|jpg|jpeg|png|gif|exe|apk|torrent)$"
 ];
@@ -515,8 +516,7 @@ function extractResolvedFileEntriesDirect(payload) {
 }
 
 function preferNamedEntries(entries) {
-  const named = entries.filter(function (item) { return item.name; });
-  return named.length ? named : entries;
+  return entries;
 }
 
 function extractResolvedFileEntries(payload) {
@@ -540,10 +540,15 @@ function extractResolvedFileEntries(payload) {
           arr[i] && arr[i].file_path, arr[i] && arr[i].fullPath, arr[i] && arr[i].full_path,
           arr[i] && arr[i].resName, arr[i] && arr[i].resourceName, arr[i] && arr[i].title
         ]);
-        if (!name) continue;
+        const size = toFiniteNumberOrNull(arr[i] && (arr[i].fileSize || arr[i].size)) || 0;
+        if (!name) {
+          if (size < 50 * 1024 * 1024) continue;
+          positional.push({ index: i, name: "", size: size, raw: arr[i] });
+          continue;
+        }
         positional.push({
           index: i, name: name,
-          size: toFiniteNumberOrNull(arr[i] && (arr[i].fileSize || arr[i].size)) || 0,
+          size: size,
           raw: arr[i]
         });
       }
@@ -681,6 +686,39 @@ function shouldBlockMagnetFile(entry, patterns, minVideoMb, videoOnly, maxVideoS
   return { blocked: false, reason: "" };
 }
 
+function pruneToDominantVideo(kept, blocked) {
+  if (kept.length <= 1) return { kept: kept, blocked: blocked };
+  const videos = kept.filter(isLikelyVideoEntry);
+  if (videos.length <= 1) return { kept: kept, blocked: blocked };
+  const hasMultipart = videos.some(function (e) { return isMultiPartVideoName(e.name); });
+  let survivors;
+  if (hasMultipart) {
+    const maxSize = Math.max.apply(null, videos.map(function (e) { return Number(e.size || 0); }));
+    const floor = maxSize * 0.45;
+    survivors = kept.filter(function (e) {
+      if (!isLikelyVideoEntry(e)) return true;
+      return isMultiPartVideoName(e.name) || Number(e.size || 0) >= floor;
+    });
+  } else {
+    const largest = videos.slice().sort(function (a, b) {
+      return Number(b.size || 0) - Number(a.size || 0);
+    })[0];
+    survivors = kept.filter(function (e) {
+      return !isLikelyVideoEntry(e) || e.index === largest.index;
+    });
+  }
+  if (survivors.length >= kept.length) return { kept: kept, blocked: blocked };
+  const survivorIndexes = {};
+  survivors.forEach(function (e) { survivorIndexes[e.index] = 1; });
+  const newBlocked = blocked.slice();
+  kept.forEach(function (e) {
+    if (!survivorIndexes[e.index]) {
+      newBlocked.push({ entry: e, reason: "pruned" });
+    }
+  });
+  return { kept: survivors, blocked: newBlocked };
+}
+
 function pickBestVideoFallback(entries, patterns) {
   let candidates = [];
   for (let i = 0; i < entries.length; i++) {
@@ -730,7 +768,8 @@ function filterResolvedMagnetFiles(entries, cfg) {
       }
     }
   }
-  return { kept: kept, blocked: blocked };
+  const pruned = pruneToDominantVideo(kept, blocked);
+  return { kept: pruned.kept, blocked: pruned.blocked };
 }
 
 function formatFilePreview(entries, limit) {
@@ -752,6 +791,7 @@ function formatBlockedPreview(blocked, limit) {
     const label = item.entry.name || ("#" + item.entry.index);
     const tag = item.reason === "size" ? " (过小)" :
       item.reason === "small-video" ? " (小体积广告)" :
+      item.reason === "pruned" ? " (冗余视频)" :
       item.reason === "non-video" ? " (非视频)" : "";
     lines.push(htmlEscape(label + tag));
   }
