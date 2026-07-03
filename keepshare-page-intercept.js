@@ -1,8 +1,9 @@
 /**
  * Egern / Surge — http-request
  * KeepShare 磁力页：请求发出前拦截；按钮走同域 ?egern= 动作（避免 egern-magnet.local 无效）
- * @version 1.3.3
+ * @version 1.3.4
  * @changelog
+ *   1.3.4 - 收紧拦截规则，保留最大正片；修复 1024/videoOnly/80MB 误杀正片
  *   1.3.3 - 恢复 KeepShare 同域 ?egern=guangya 内联提交（egern-magnet.local 在 Egern 内无效）；内联过滤
  *   1.3.2 - 光鸭按钮改走 egern-magnet.local/guangya（复用过滤脚本）；去掉成功后自动跳转 App
  *   1.2.4 - 模块参数改为逗号分隔 positional（参考 trakt sgmodule）
@@ -19,7 +20,7 @@ const SITE_ORIGIN = "https://www.guangyapan.com";
 const UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
 
-const SCRIPT_VERSION = "1.3.3";
+const SCRIPT_VERSION = "1.3.4";
 
 /** 与 Magnet-Guangya.sgmodule argument= 占位符顺序一致 */
 const POSITIONAL_ARG_KEYS = [
@@ -42,8 +43,8 @@ const VIDEO_EXTS = {
 };
 
 const DEFAULT_BLOCK_PATTERN_SOURCES = [
-  "广告|推广|宣传|加群|更多资源|最新地址|影视大站|1024|91\\.tv|草榴",
-  "sample|preview|trailer|预告|预览|样片|精彩花絮",
+  "广告|推广|宣传|加群|更多资源|最新地址|影视大站|草榴|91porn|91\\.tv|1024\\.org|1024la",
+  "(?:^|[/\\\\_.\\-\\s])(?:sample|preview|trailer|预告|预览|样片|精彩花絮)(?:[/\\\\_.\\-\\s]|\\.|$)",
   "\\.(txt|url|nfo|htm|html|jpg|jpeg|png|gif|exe|apk|torrent)$"
 ];
 
@@ -598,19 +599,47 @@ function parseBlockPatterns(cfg) {
   return patterns;
 }
 
+function basenamePath(name) {
+  const s = String(name || "").replace(/\\/g, "/");
+  const i = s.lastIndexOf("/");
+  return i >= 0 ? s.slice(i + 1) : s;
+}
+
 function isVideoFileName(name) {
-  const parts = String(name || "").split(".");
+  const base = basenamePath(name);
+  const parts = base.split(".");
   if (parts.length < 2) return false;
   return !!VIDEO_EXTS[parts.pop().toLowerCase()];
 }
 
-function isMagnetFilterEnabled(cfg) {
-  return resolveVal(cfg.MAGNET_FILTER, "1") !== "0";
+function isObviousJunkName(name) {
+  const base = basenamePath(name);
+  return /\.(txt|url|nfo|htm|html|jpg|jpeg|png|gif|exe|apk|torrent|srt|ass)$/i.test(base);
 }
 
-function getMinVideoMb(cfg) {
-  const n = Number(resolveVal(cfg.MAGNET_MIN_VIDEO_MB, "80"));
-  return Number.isFinite(n) && n > 0 ? n : 0;
+function isLikelyVideoEntry(entry) {
+  if (isVideoFileName(entry.name)) return true;
+  const size = Number(entry.size || 0);
+  if (size >= 50 * 1024 * 1024) return true;
+  const raw = entry.raw;
+  if (raw) {
+    const t = raw.resType != null ? raw.resType : raw.fileType;
+    if (t === 1 || t === "1" || String(raw.type || "").toLowerCase() === "video") return true;
+  }
+  return false;
+}
+
+function computeMaxVideoSize(entries) {
+  let max = 0;
+  for (let i = 0; i < entries.length; i++) {
+    if (!isLikelyVideoEntry(entries[i])) continue;
+    max = Math.max(max, Number(entries[i].size || 0));
+  }
+  return max;
+}
+
+function isMagnetFilterEnabled(cfg) {
+  return resolveVal(cfg.MAGNET_FILTER, "1") !== "0";
 }
 
 function isVideoOnlyEnabled(cfg) {
@@ -626,55 +655,81 @@ function isMultiPartVideoName(name) {
     /分段|第[\d一二三四五六七八九十]+[部分集段]/.test(n);
 }
 
-function applySmartVideoPrune(entries) {
-  const videos = entries.filter(function (item) { return isVideoFileName(item.name); });
-  const sized = videos.filter(function (item) { return Number(item.size) > 0; });
-  if (sized.length < 2) return { kept: entries, blocked: [] };
-  sized.sort(function (a, b) { return b.size - a.size; });
-  const threshold = sized[0].size * 0.15;
-  const kept = [];
-  const blocked = [];
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i];
-    if (!isVideoFileName(entry.name)) { kept.push(entry); continue; }
-    const size = Number(entry.size || 0);
-    if (size > 0 && size < threshold && !isMultiPartVideoName(entry.name)) {
-      blocked.push({ entry: entry, reason: "small-video" });
-    } else kept.push(entry);
-  }
-  return { kept: kept, blocked: blocked };
+function getMinVideoMb(cfg) {
+  const n = Number(resolveVal(cfg.MAGNET_MIN_VIDEO_MB, "0"));
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-function shouldBlockMagnetFile(entry, patterns, minVideoMb, videoOnly) {
+function shouldBlockMagnetFile(entry, patterns, minVideoMb, videoOnly, maxVideoSize) {
   const name = String(entry.name || "");
-  if (name) {
-    for (let i = 0; i < patterns.length; i++) {
-      if (patterns[i].test(name)) return { blocked: true, reason: "pattern" };
-    }
-    if (videoOnly && !isVideoFileName(name)) return { blocked: true, reason: "non-video" };
+  if (isObviousJunkName(name)) return { blocked: true, reason: "junk" };
+  for (let i = 0; i < patterns.length; i++) {
+    if (patterns[i].test(name)) return { blocked: true, reason: "pattern" };
   }
-  if (minVideoMb > 0 && name && isVideoFileName(name)) {
-    const size = Number(entry.size || 0);
-    if (size > 0 && size < minVideoMb * 1024 * 1024) return { blocked: true, reason: "size" };
+  if (videoOnly && name && !isLikelyVideoEntry(entry) && !isObviousJunkName(name)) {
+    return { blocked: false, reason: "" };
+  }
+  const size = Number(entry.size || 0);
+  const isVideo = isLikelyVideoEntry(entry);
+  if (isVideo && size > 0 && maxVideoSize > 0 && size < maxVideoSize * 0.12 && !isMultiPartVideoName(name)) {
+    return { blocked: true, reason: "small-video" };
+  }
+  if (minVideoMb > 0 && isVideo && size > 0 && maxVideoSize > 0 &&
+      size < minVideoMb * 1024 * 1024 && size < maxVideoSize * 0.35) {
+    return { blocked: true, reason: "size" };
   }
   return { blocked: false, reason: "" };
+}
+
+function pickBestVideoFallback(entries, patterns) {
+  let candidates = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const name = String(entry.name || "");
+    if (isObviousJunkName(name)) continue;
+    let hit = false;
+    for (let p = 0; p < patterns.length; p++) {
+      if (patterns[p].test(name)) { hit = true; break; }
+    }
+    if (hit) continue;
+    candidates.push(entry);
+  }
+  if (!candidates.length) {
+    candidates = entries.filter(function (e) { return isLikelyVideoEntry(e); });
+  }
+  if (!candidates.length) candidates = entries.slice();
+  candidates.sort(function (a, b) { return Number(b.size || 0) - Number(a.size || 0); });
+  return candidates[0] || null;
 }
 
 function filterResolvedMagnetFiles(entries, cfg) {
   const patterns = parseBlockPatterns(cfg);
   const minVideoMb = getMinVideoMb(cfg);
   const videoOnly = isVideoOnlyEnabled(cfg);
+  const maxVideoSize = computeMaxVideoSize(entries);
   let kept = [];
   const blocked = [];
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
-    const verdict = shouldBlockMagnetFile(entry, patterns, minVideoMb, videoOnly);
+    const verdict = shouldBlockMagnetFile(entry, patterns, minVideoMb, videoOnly, maxVideoSize);
     if (verdict.blocked) blocked.push({ entry: entry, reason: verdict.reason });
     else kept.push(entry);
   }
-  const pruned = applySmartVideoPrune(kept);
-  kept = pruned.kept;
-  for (let j = 0; j < pruned.blocked.length; j++) blocked.push(pruned.blocked[j]);
+  if (!kept.length && entries.length) {
+    const fallback = pickBestVideoFallback(entries, patterns);
+    if (fallback) {
+      kept = [fallback];
+      blocked.length = 0;
+      for (let j = 0; j < entries.length; j++) {
+        if (entries[j].index !== fallback.index) {
+          blocked.push({
+            entry: entries[j],
+            reason: entries[j].index === fallback.index ? "" : "fallback"
+          });
+        }
+      }
+    }
+  }
   return { kept: kept, blocked: blocked };
 }
 
