@@ -2,6 +2,7 @@
  * Egern / Surge — http-request
  * @version 1.3.5
  * @changelog
+ *   1.3.7 - 修复文件解析阶段丢失文件的问题：为没有 index 的文件自动分配唯一索引；改进去重逻辑
  *   1.3.6 - 修复 videoOnly 模式下非视频文件判断错误；改进视频文件保留策略（保留多个大体积视频）；增强文件解析兼容性
  *   1.3.5 - 不再丢弃无文件名的正片；多视频时只保留最大正片；补充直播/社區类广告规则
  *   1.3.4 - 收紧拦截规则，保留最大正片；修复 1024/videoOnly/80MB 误杀正片
@@ -19,7 +20,7 @@ const SITE_ORIGIN = "https://www.guangyapan.com";
 const UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
 
-const SCRIPT_VERSION = "1.3.6";
+const SCRIPT_VERSION = "1.3.7";
 
 const POSITIONAL_ARG_KEYS = [
   "GUANGYA_REFRESH_TOKEN",
@@ -356,7 +357,10 @@ function findFirstValueByKeys(node, keys, seen) {
   return null;
 }
 
-function normalizeResolvedFileEntry(obj) {
+// 全局计数器，用于为没有 index 的文件分配唯一索引
+let _autoIndex = 10000;
+
+function normalizeResolvedFileEntry(obj, fallbackIndex) {
   if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
 
   // 尝试从多个可能的字段获取文件索引
@@ -372,8 +376,9 @@ function normalizeResolvedFileEntry(obj) {
     obj.file_id;
 
   const index = toFiniteNumberOrNull(indexRaw);
-  // 允许 index 为 0 或正整数，只有完全无法解析时才返回 null
-  if (index == null || index < 0) return null;
+  // 如果无法解析 index，使用 fallbackIndex 或自动分配
+  const finalIndex = (index != null && index >= 0) ? index :
+    (fallbackIndex != null ? fallbackIndex : _autoIndex++);
 
   const name = chooseBestNameCandidate([
     obj.name, obj.fileName, obj.file_name, obj.filename,
@@ -391,7 +396,7 @@ function normalizeResolvedFileEntry(obj) {
     obj.bytes != null ? obj.bytes :
     obj.contentLength
   );
-  return { index: index, name: name, size: size == null ? 0 : size, raw: obj };
+  return { index: finalIndex, name: name, size: size == null ? 0 : size, raw: obj };
 }
 
 function extractResolvedFileEntriesDirect(payload) {
@@ -402,11 +407,27 @@ function extractResolvedFileEntriesDirect(payload) {
     data.items || data.fileInfos || data.file_list || data.file_list_info ||
     data.result || data.details;
   if (!Array.isArray(list) || !list.length) return null;
-  let entries = list.map(normalizeResolvedFileEntry).filter(Boolean);
-  // 去重：保留第一个出现的同 index 文件
-  entries = entries.filter(function (item, index, arr) {
-    return arr.findIndex(function (other) { return other.index === item.index; }) === index;
+
+  // 重置自动索引计数器
+  _autoIndex = 10000;
+
+  // 解析所有文件，为没有 index 的文件分配唯一索引
+  let entries = [];
+  for (let i = 0; i < list.length; i++) {
+    const entry = normalizeResolvedFileEntry(list[i], i);
+    if (entry) entries.push(entry);
+  }
+
+  // 去重：只对有明确 index 的文件去重，保留第一个出现的
+  const seenIndexes = {};
+  entries = entries.filter(function (item) {
+    // 自动分配的 index (>=10000) 不参与去重
+    if (item.index >= 10000) return true;
+    if (seenIndexes[item.index]) return false;
+    seenIndexes[item.index] = true;
+    return true;
   }).sort(function (a, b) { return a.index - b.index; });
+
   return entries.length ? entries : null;
 }
 
@@ -424,9 +445,21 @@ function extractResolvedFileEntries(payload) {
 
   for (let a = 0; a < arrays.length; a++) {
     const arr = arrays[a];
-    let entries = arr.map(normalizeResolvedFileEntry).filter(Boolean);
-    entries = entries.filter(function (item, index, list) {
-      return list.findIndex(function (other) { return other.index === item.index; }) === index;
+
+    // 使用 fallbackIndex 解析所有文件
+    let entries = [];
+    for (let i = 0; i < arr.length; i++) {
+      const entry = normalizeResolvedFileEntry(arr[i], i);
+      if (entry) entries.push(entry);
+    }
+
+    // 去重：只对有明确 index 的文件去重
+    const seenIndexes = {};
+    entries = entries.filter(function (item) {
+      if (item.index >= 10000) return true;
+      if (seenIndexes[item.index]) return false;
+      seenIndexes[item.index] = true;
+      return true;
     }).sort(function (x, y) { return x.index - y.index; });
 
     if (!entries.length) {
