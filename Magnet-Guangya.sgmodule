@@ -1,5 +1,5 @@
 #!name=磁力拦截 · KeepShare / 光鸭 / Forward JavDB
-#!desc=KeepShare 跳转前拦截 + 光鸭 v1.3.5 磁力过滤 + Forward 豆瓣/TMDB 转 JavDB 搜索
+#!desc=KeepShare 跳转前拦截 + 光鸭 v1.3.6 磁力过滤 + Forward 豆瓣/TMDB 转 JavDB 搜索
 #!author=老头
 #!system=ios
 #!category=🧲 磁力
@@ -9,9 +9,9 @@
 
 [Script]
 # v1.3.5 — 脚本从 GitHub 远程加载（?v= 用于刷新 Egern 缓存）
-磁力拦截-KeepShare = type=http-request, pattern=^https?://(?:[\w-]+\.)?keepshare\.(?:org|cc)/[^?#]*magnet, timeout=60, argument={{{GUANGYA_REFRESH_TOKEN}}},{{{GUANGYA_PARENT_ID}}},{{{KEEPSHARE_TEMPLATE}}},{{{ENABLE_115}}},{{{ENABLE_PIKPAK}}},{{{ENABLE_GUANGYA}}},{{{MAGNET_HOST}}},{{{MAGNET_FILTER}}},{{{MAGNET_BLOCK_PATTERNS}}},{{{MAGNET_MIN_VIDEO_MB}}},{{{MAGNET_VIDEO_ONLY}}}, script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/keepshare-page-intercept.js?v=1.3.5
+磁力拦截-KeepShare = type=http-request, pattern=^https?://(?:[\w-]+\.)?keepshare\.(?:org|cc)/[^?#]*magnet, timeout=60, argument={{{GUANGYA_REFRESH_TOKEN}}},{{{GUANGYA_PARENT_ID}}},{{{KEEPSHARE_TEMPLATE}}},{{{ENABLE_115}}},{{{ENABLE_PIKPAK}}},{{{ENABLE_GUANGYA}}},{{{MAGNET_HOST}}},{{{MAGNET_FILTER}}},{{{MAGNET_BLOCK_PATTERNS}}},{{{MAGNET_MIN_VIDEO_MB}}},{{{MAGNET_VIDEO_ONLY}}}, script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/keepshare-page-intercept.js?v=1.3.6
 
-磁力拦截-操作 = type=http-request, pattern=^https?://egern-magnet\.local/, timeout=60, argument={{{GUANGYA_REFRESH_TOKEN}}},{{{GUANGYA_PARENT_ID}}},{{{KEEPSHARE_TEMPLATE}}},{{{ENABLE_115}}},{{{ENABLE_PIKPAK}}},{{{ENABLE_GUANGYA}}},{{{MAGNET_HOST}}},{{{MAGNET_FILTER}}},{{{MAGNET_BLOCK_PATTERNS}}},{{{MAGNET_MIN_VIDEO_MB}}},{{{MAGNET_VIDEO_ONLY}}}, script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/magnet-intercept-request.js?v=1.3.5
+磁力拦截-操作 = type=http-request, pattern=^https?://egern-magnet\.local/, timeout=60, argument={{{GUANGYA_REFRESH_TOKEN}}},{{{GUANGYA_PARENT_ID}}},{{{KEEPSHARE_TEMPLATE}}},{{{ENABLE_115}}},{{{ENABLE_PIKPAK}}},{{{ENABLE_GUANGYA}}},{{{MAGNET_HOST}}},{{{MAGNET_FILTER}}},{{{MAGNET_BLOCK_PATTERNS}}},{{{MAGNET_MIN_VIDEO_MB}}},{{{MAGNET_VIDEO_ONLY}}}, script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/magnet-intercept-request.js?v=1.3.6
 
 # Forward 详情页豆瓣/TMDB 半屏搜索 → JavDB 番号搜索（与 forward-douban-javdb.js 同目录）
 Forward-豆瓣转JavDB = type=http-request, pattern=^https?://(?:m\.douban\.com/search|search\.douban\.com/movie/subject_search|www\.themoviedb\.org/search), timeout=15, script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/forward-douban-javdb.js

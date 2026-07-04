@@ -3,6 +3,7 @@
  * KeepShare 磁力页：请求发出前拦截；按钮走同域 ?egern= 动作（避免 egern-magnet.local 无效）
  * @version 1.3.5
  * @changelog
+ *   1.3.6 - 修复 videoOnly 模式下非视频文件判断错误；改进视频文件保留策略（保留多个大体积视频）；增强文件解析兼容性
  *   1.3.5 - 不再丢弃无文件名的正片；多视频时只保留最大正片；补充直播/社區类广告规则
  *   1.3.4 - 收紧拦截规则，保留最大正片；修复 1024/videoOnly/80MB 误杀正片
  *   1.3.3 - 恢复 KeepShare 同域 ?egern=guangya 内联提交（egern-magnet.local 在 Egern 内无效）；内联过滤
@@ -21,7 +22,7 @@ const SITE_ORIGIN = "https://www.guangyapan.com";
 const UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
 
-const SCRIPT_VERSION = "1.3.5";
+const SCRIPT_VERSION = "1.3.6";
 
 /** 与 Magnet-Guangya.sgmodule argument= 占位符顺序一致 */
 const POSITIONAL_ARG_KEYS = [
@@ -475,21 +476,28 @@ function findFirstValueByKeys(node, keys, seen) {
 
 function normalizeResolvedFileEntry(obj) {
   if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
-  const index = toFiniteNumberOrNull(
-    obj.fileIndex != null ? obj.fileIndex :
+
+  // 尝试从多个可能的字段获取文件索引
+  const indexRaw = obj.fileIndex != null ? obj.fileIndex :
     obj.file_index != null ? obj.file_index :
     obj.index != null ? obj.index :
     obj.idx != null ? obj.idx :
     obj.fileNo != null ? obj.fileNo :
     obj.file_no != null ? obj.file_no :
-    obj.seq
-  );
+    obj.seq != null ? obj.seq :
+    obj.id != null ? obj.id :
+    obj.fileId != null ? obj.fileId :
+    obj.file_id;
+
+  const index = toFiniteNumberOrNull(indexRaw);
+  // 允许 index 为 0 或正整数，只有完全无法解析时才返回 null
   if (index == null || index < 0) return null;
+
   const name = chooseBestNameCandidate([
     obj.name, obj.fileName, obj.file_name, obj.filename,
     obj.path, obj.filePath, obj.file_path, obj.fullPath, obj.full_path,
     obj.relativePath, obj.relative_path, obj.filePathName, obj.file_path_name,
-    obj.resName, obj.resourceName, obj.title
+    obj.resName, obj.resourceName, obj.title, obj.label, obj.displayName
   ]);
   const size = toFiniteNumberOrNull(
     obj.fileSize != null ? obj.fileSize :
@@ -498,7 +506,8 @@ function normalizeResolvedFileEntry(obj) {
     obj.size != null ? obj.size :
     obj.length != null ? obj.length :
     obj.len != null ? obj.len :
-    obj.bytes
+    obj.bytes != null ? obj.bytes :
+    obj.contentLength
   );
   return { index: index, name: name, size: size == null ? 0 : size, raw: obj };
 }
@@ -506,9 +515,13 @@ function normalizeResolvedFileEntry(obj) {
 function extractResolvedFileEntriesDirect(payload) {
   const data = payload && payload.data;
   if (!data || typeof data !== "object") return null;
-  const list = data.list || data.files || data.fileList || data.resList || data.items || data.fileInfos;
+  // 扩展可能的字段名，兼容更多 API 返回格式
+  const list = data.list || data.files || data.fileList || data.resList ||
+    data.items || data.fileInfos || data.file_list || data.file_list_info ||
+    data.result || data.details;
   if (!Array.isArray(list) || !list.length) return null;
   let entries = list.map(normalizeResolvedFileEntry).filter(Boolean);
+  // 去重：保留第一个出现的同 index 文件
   entries = entries.filter(function (item, index, arr) {
     return arr.findIndex(function (other) { return other.index === item.index; }) === index;
   }).sort(function (a, b) { return a.index - b.index; });
@@ -671,8 +684,9 @@ function shouldBlockMagnetFile(entry, patterns, minVideoMb, videoOnly, maxVideoS
   for (let i = 0; i < patterns.length; i++) {
     if (patterns[i].test(name)) return { blocked: true, reason: "pattern" };
   }
-  if (videoOnly && name && !isLikelyVideoEntry(entry) && !isObviousJunkName(name)) {
-    return { blocked: false, reason: "" };
+  // videoOnly 模式：拦截非视频文件（无文件名的除外，可能是未知正片）
+  if (videoOnly && name && !isLikelyVideoEntry(entry)) {
+    return { blocked: true, reason: "non-video" };
   }
   const size = Number(entry.size || 0);
   const isVideo = isLikelyVideoEntry(entry);
@@ -690,9 +704,13 @@ function pruneToDominantVideo(kept, blocked) {
   if (kept.length <= 1) return { kept: kept, blocked: blocked };
   const videos = kept.filter(isLikelyVideoEntry);
   if (videos.length <= 1) return { kept: kept, blocked: blocked };
+
+  // 检查是否有多段视频（part1, part2, cd1, cd2等）
   const hasMultipart = videos.some(function (e) { return isMultiPartVideoName(e.name); });
+
   let survivors;
   if (hasMultipart) {
+    // 多段视频：保留所有多段视频 + 体积较大的单段视频
     const maxSize = Math.max.apply(null, videos.map(function (e) { return Number(e.size || 0); }));
     const floor = maxSize * 0.45;
     survivors = kept.filter(function (e) {
@@ -700,13 +718,15 @@ function pruneToDominantVideo(kept, blocked) {
       return isMultiPartVideoName(e.name) || Number(e.size || 0) >= floor;
     });
   } else {
-    const largest = videos.slice().sort(function (a, b) {
-      return Number(b.size || 0) - Number(a.size || 0);
-    })[0];
+    // 单段视频：保留所有体积较大的视频（>=最大视频的30%），而不是只保留最大的一个
+    const maxSize = Math.max.apply(null, videos.map(function (e) { return Number(e.size || 0); }));
+    const floor = maxSize * 0.3;
     survivors = kept.filter(function (e) {
-      return !isLikelyVideoEntry(e) || e.index === largest.index;
+      if (!isLikelyVideoEntry(e)) return true;
+      return Number(e.size || 0) >= floor;
     });
   }
+
   if (survivors.length >= kept.length) return { kept: kept, blocked: blocked };
   const survivorIndexes = {};
   survivors.forEach(function (e) { survivorIndexes[e.index] = 1; });
