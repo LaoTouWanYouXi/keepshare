@@ -36,7 +36,7 @@ function extractJavCode(text) {
   var code = extractMatchCode(text);
   if (!code) return "";
   var parts = code.match(/^([A-Z0-9]+)-(\d+)$/i);
-  if (parts) return parts[1] + "-" + String(parseInt(parts[2], 10));
+  if (parts) return parts[1] + "-" + parts[2];
   return code;
 }
 
