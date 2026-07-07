@@ -1,8 +1,9 @@
 /**
  * Egern / Surge — http-request
  * KeepShare 磁力页：请求发出前拦截；按钮走同域 ?egern= 动作（避免 egern-magnet.local 无效）
- * @version 1.3.8
+ * @version 1.3.9
  * @changelog
+ *   1.3.9 - 修复 123 云盘 API：改用 yun.123pan.com 并添加请求签名
  *   1.3.8 - 新增 123 云盘一键导入（resolve + submit 离线下载 API）
  *   1.3.7 - 修复文件解析阶段丢失文件的问题：为没有 index 的文件自动分配唯一索引；改进去重逻辑
  *   1.3.6 - 修复 videoOnly 模式下非视频文件判断错误；改进视频文件保留策略（保留多个大体积视频）；增强文件解析兼容性
@@ -24,9 +25,10 @@ const SITE_ORIGIN = "https://www.guangyapan.com";
 const UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
 
-const SCRIPT_VERSION = "1.3.8";
+const SCRIPT_VERSION = "1.3.9";
 
-const PAN123_API = "https://www.123pan.com";
+const PAN123_API = "https://yun.123pan.com";
+const PAN123_SIGN_TABLE = "adeghlmyijnopkqrstubcvwssz";
 
 /** 与 Magnet-Guangya.sgmodule argument= 占位符顺序一致 */
 const POSITIONAL_ARG_KEYS = [
@@ -962,6 +964,49 @@ async function createGuangyaTask(token, did, magnet, parentId, fileIndexes) {
   );
 }
 
+function crc32IEEEBytes(bytes) {
+  let crc = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) {
+    crc ^= bytes[i];
+    for (let j = 0; j < 8; j++) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function crc32IEEEStr(str) {
+  const bytes = [];
+  for (let i = 0; i < str.length; i++) bytes.push(str.charCodeAt(i) & 0xff);
+  return crc32IEEEBytes(bytes);
+}
+
+function pan123CstDigits() {
+  const d = new Date(Date.now() + 8 * 3600 * 1000);
+  const pad = function (n) { return n < 10 ? "0" + n : String(n); };
+  return d.getUTCFullYear() + pad(d.getUTCMonth() + 1) + pad(d.getUTCDate()) +
+    pad(d.getUTCHours()) + pad(d.getUTCMinutes());
+}
+
+function signPan123Path(path, os, version) {
+  const random = String(Math.round(Math.random() * 1e7));
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const digits = pan123CstDigits();
+  const nowBytes = [];
+  for (let i = 0; i < digits.length; i++) {
+    nowBytes.push(PAN123_SIGN_TABLE.charCodeAt(parseInt(digits.charAt(i), 10)));
+  }
+  const timeSign = String(crc32IEEEBytes(nowBytes));
+  const data = [timestamp, random, path, os, version, timeSign].join("|");
+  const dataSign = String(crc32IEEEStr(data));
+  return { key: timeSign, value: timestamp + "-" + random + "-" + dataSign };
+}
+
+function buildPan123ApiUrl(apiPath) {
+  const sign = signPan123Path(apiPath, "web", "3");
+  return PAN123_API + apiPath + "?" + sign.key + "=" + sign.value;
+}
+
 function pan123Headers(token) {
   return {
     accept: "application/json, text/plain, */*",
@@ -979,19 +1024,45 @@ function isPan123Success(result) {
   return !!(result && result.code === 0);
 }
 
+function pan123Post(apiPath, token, bodyObj, timeoutMs) {
+  return new Promise(function (resolve, reject) {
+    $httpClient.post({
+      url: buildPan123ApiUrl(apiPath),
+      headers: pan123Headers(token),
+      body: JSON.stringify(bodyObj),
+      timeout: timeoutMs || 25
+    }, function (err, resp, data) {
+      if (err) return reject(err);
+      const text = String(data || "");
+      const status = resp && resp.status ? resp.status : 0;
+      if (text.charAt(0) === "<" || /<!doctype/i.test(text)) {
+        return reject(new Error(
+          "123 云盘返回 HTML 而非 JSON（HTTP " + status +
+          "），请重新登录 yun.123pan.com 并更新 PAN123_TOKEN"
+        ));
+      }
+      try {
+        resolve(typeof data === "string" ? JSON.parse(data) : data);
+      } catch (e) {
+        reject(new Error("JSON parse failed: " + text.slice(0, 200)));
+      }
+    });
+  });
+}
+
 async function resolvePan123Magnet(token, magnet) {
-  return httpPost(
-    PAN123_API + "/b/api/v2/offline_download/task/resolve",
-    pan123Headers(token),
+  return pan123Post(
+    "/b/api/v2/offline_download/task/resolve",
+    token,
     { urls: magnet },
     45
   );
 }
 
 async function submitPan123Task(token, resourceId, fileIds) {
-  return httpPost(
-    PAN123_API + "/b/api/v2/offline_download/task/submit",
-    pan123Headers(token),
+  return pan123Post(
+    "/b/api/v2/offline_download/task/submit",
+    token,
     {
       resource_list: [{
         resource_id: resourceId,
@@ -1131,7 +1202,7 @@ function handle123Pan(magnet, cfg, reqUrl) {
   if (!token) {
     respondLocal(200, {}, htmlPage("未配置 Token", "<h1>未配置 123 云盘 Token</h1>" +
       "<p><b>获取方式：</b></p>" +
-      "<p>1. 浏览器登录 <a href=\"https://www.123pan.com/\">123pan.com</a></p>" +
+      "<p>1. 浏览器登录 <a href=\"https://yun.123pan.com/\">yun.123pan.com</a></p>" +
       "<p>2. 开发者工具 → Application → Local Storage → 复制 <code>authorToken</code></p>" +
       "<p>3. Egern 模块参数填写 <code>PAN123_TOKEN</code></p>" +
       (backUrl ? "<a class=\"btn btn-secondary\" href=\"" + htmlEscape(backUrl) + "\">返回</a>" : "")));
