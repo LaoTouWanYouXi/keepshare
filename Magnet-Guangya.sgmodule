@@ -1,17 +1,17 @@
 #!name=磁力拦截 · KeepShare / 光鸭 / Forward JavDB
-#!desc=KeepShare 跳转前拦截 + 光鸭/123 云盘 v1.3.9 磁力过滤 + Forward 豆瓣/TMDB 转 JavDB 搜索
+#!desc=KeepShare 跳转前拦截 + 光鸭/123 云盘 v1.4.0 磁力过滤 + Forward 豆瓣/TMDB 转 JavDB 搜索
 #!author=老头
 #!system=ios
 #!category=🧲 磁力
 
-#!arguments=GUANGYA_REFRESH_TOKEN:"",GUANGYA_PARENT_ID:"",KEEPSHARE_TEMPLATE:"https://keepshare.cc/ppvt5qst/",ENABLE_115:"1",ENABLE_PIKPAK:"1",ENABLE_GUANGYA:"1",MAGNET_HOST:"egern-magnet.local",MAGNET_FILTER:"1",MAGNET_BLOCK_PATTERNS:"",MAGNET_MIN_VIDEO_MB:"0",MAGNET_VIDEO_ONLY:"1",PAN123_TOKEN:"",ENABLE_123:"1"
-#!arguments-desc=GUANGYA_REFRESH_TOKEN: 光鸭 refresh_token（gy.- 开头，一键导入必填）\nGUANGYA_PARENT_ID: 光鸭保存目录 ID，留空=根目录\nKEEPSHARE_TEMPLATE: KeepShare 自动分享模板\nENABLE_115: 显示 115 按钮 [0|1]\nENABLE_PIKPAK: 显示 PikPak 按钮 [0|1]\nENABLE_GUANGYA: 显示光鸭按钮 [0|1]\nMAGNET_HOST: 虚拟操作域名\nMAGNET_FILTER: 光鸭/123 导入前过滤 [1|0]\nMAGNET_BLOCK_PATTERNS: 拦截正则，分号分隔，留空=内置规则\nMAGNET_MIN_VIDEO_MB: 最小保留视频 MB（0=仅按相对体积判断）\nMAGNET_VIDEO_ONLY: 仅保留视频 [1|0]\nPAN123_TOKEN: 123 云盘 authorToken（登录 yun.123pan.com → Local Storage，一键导入 123 必填）\nENABLE_123: 显示 123 云盘按钮 [0|1]
+#!arguments=GUANGYA_REFRESH_TOKEN:"",GUANGYA_PARENT_ID:"",KEEPSHARE_TEMPLATE:"https://keepshare.cc/ppvt5qst/",ENABLE_115:"1",ENABLE_PIKPAK:"1",ENABLE_GUANGYA:"1",MAGNET_HOST:"egern-magnet.local",MAGNET_FILTER:"1",MAGNET_BLOCK_PATTERNS:"",MAGNET_MIN_VIDEO_MB:"0",MAGNET_VIDEO_ONLY:"1",PAN123_TOKEN:"",PAN123_PARENT_ID:"",ENABLE_123:"1"
+#!arguments-desc=GUANGYA_REFRESH_TOKEN: 光鸭 refresh_token（gy.- 开头，一键导入必填）\nGUANGYA_PARENT_ID: 光鸭保存目录 ID，留空=根目录\nKEEPSHARE_TEMPLATE: KeepShare 自动分享模板\nENABLE_115: 显示 115 按钮 [0|1]\nENABLE_PIKPAK: 显示 PikPak 按钮 [0|1]\nENABLE_GUANGYA: 显示光鸭按钮 [0|1]\nMAGNET_HOST: 虚拟操作域名\nMAGNET_FILTER: 光鸭/123 导入前过滤 [1|0]\nMAGNET_BLOCK_PATTERNS: 拦截正则，分号分隔，留空=内置规则\nMAGNET_MIN_VIDEO_MB: 最小保留视频 MB（0=仅按相对体积判断）\nMAGNET_VIDEO_ONLY: 仅保留视频 [1|0]\nPAN123_TOKEN: 123 云盘 authorToken（登录 yun.123pan.com → Local Storage，一键导入 123 必填）\nPAN123_PARENT_ID: 123 云盘保存目录 ID（文件夹 FileId），留空=默认目录\nENABLE_123: 显示 123 云盘按钮 [0|1]
 
 [Script]
 # v1.3.5 — 脚本从 GitHub 远程加载（?v= 用于刷新 Egern 缓存）
-磁力拦截-KeepShare = type=http-request, pattern=^https?://(?:[\w-]+\.)?keepshare\.(?:org|cc)/[^?#]*magnet, timeout=60, argument={{{GUANGYA_REFRESH_TOKEN}}},{{{GUANGYA_PARENT_ID}}},{{{KEEPSHARE_TEMPLATE}}},{{{ENABLE_115}}},{{{ENABLE_PIKPAK}}},{{{ENABLE_GUANGYA}}},{{{MAGNET_HOST}}},{{{MAGNET_FILTER}}},{{{MAGNET_BLOCK_PATTERNS}}},{{{MAGNET_MIN_VIDEO_MB}}},{{{MAGNET_VIDEO_ONLY}}},{{{PAN123_TOKEN}}},{{{ENABLE_123}}}, script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/keepshare-page-intercept.js?v=1.3.9
+磁力拦截-KeepShare = type=http-request, pattern=^https?://(?:[\w-]+\.)?keepshare\.(?:org|cc)/[^?#]*magnet, timeout=60, argument={{{GUANGYA_REFRESH_TOKEN}}},{{{GUANGYA_PARENT_ID}}},{{{KEEPSHARE_TEMPLATE}}},{{{ENABLE_115}}},{{{ENABLE_PIKPAK}}},{{{ENABLE_GUANGYA}}},{{{MAGNET_HOST}}},{{{MAGNET_FILTER}}},{{{MAGNET_BLOCK_PATTERNS}}},{{{MAGNET_MIN_VIDEO_MB}}},{{{MAGNET_VIDEO_ONLY}}},{{{PAN123_TOKEN}}},{{{PAN123_PARENT_ID}}},{{{ENABLE_123}}}, script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/keepshare-page-intercept.js?v=1.4.0
 
-磁力拦截-操作 = type=http-request, pattern=^https?://egern-magnet\.local/, timeout=60, argument={{{GUANGYA_REFRESH_TOKEN}}},{{{GUANGYA_PARENT_ID}}},{{{KEEPSHARE_TEMPLATE}}},{{{ENABLE_115}}},{{{ENABLE_PIKPAK}}},{{{ENABLE_GUANGYA}}},{{{MAGNET_HOST}}},{{{MAGNET_FILTER}}},{{{MAGNET_BLOCK_PATTERNS}}},{{{MAGNET_MIN_VIDEO_MB}}},{{{MAGNET_VIDEO_ONLY}}},{{{PAN123_TOKEN}}},{{{ENABLE_123}}}, script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/magnet-intercept-request.js?v=1.3.9
+磁力拦截-操作 = type=http-request, pattern=^https?://egern-magnet\.local/, timeout=60, argument={{{GUANGYA_REFRESH_TOKEN}}},{{{GUANGYA_PARENT_ID}}},{{{KEEPSHARE_TEMPLATE}}},{{{ENABLE_115}}},{{{ENABLE_PIKPAK}}},{{{ENABLE_GUANGYA}}},{{{MAGNET_HOST}}},{{{MAGNET_FILTER}}},{{{MAGNET_BLOCK_PATTERNS}}},{{{MAGNET_MIN_VIDEO_MB}}},{{{MAGNET_VIDEO_ONLY}}},{{{PAN123_TOKEN}}},{{{PAN123_PARENT_ID}}},{{{ENABLE_123}}}, script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/magnet-intercept-request.js?v=1.4.0
 
 # Forward 详情页豆瓣/TMDB 半屏搜索 → JavDB 番号搜索（与 forward-douban-javdb.js 同目录）
 Forward-豆瓣转JavDB = type=http-request, pattern=^https?://(?:m\.douban\.com/search|search\.douban\.com/movie/subject_search|www\.themoviedb\.org/search), timeout=15, script-path=https://raw.githubusercontent.com/LaoTouWanYouXi/keepshare/refs/heads/main/forward-douban-javdb.js

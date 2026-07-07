@@ -1,8 +1,9 @@
 /**
  * Egern / Surge — http-request
  * KeepShare 磁力页：请求发出前拦截；按钮走同域 ?egern= 动作（避免 egern-magnet.local 无效）
- * @version 1.3.9
+ * @version 1.4.0
  * @changelog
+ *   1.4.0 - 新增 PAN123_PARENT_ID 可配置 123 云盘保存目录
  *   1.3.9 - 修复 123 云盘 API：改用 yun.123pan.com 并添加请求签名
  *   1.3.8 - 新增 123 云盘一键导入（resolve + submit 离线下载 API）
  *   1.3.7 - 修复文件解析阶段丢失文件的问题：为没有 index 的文件自动分配唯一索引；改进去重逻辑
@@ -25,7 +26,7 @@ const SITE_ORIGIN = "https://www.guangyapan.com";
 const UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
 
-const SCRIPT_VERSION = "1.3.9";
+const SCRIPT_VERSION = "1.4.0";
 
 const PAN123_API = "https://yun.123pan.com";
 const PAN123_SIGN_TABLE = "adeghlmyijnopkqrstubcvwssz";
@@ -44,6 +45,7 @@ const POSITIONAL_ARG_KEYS = [
   "MAGNET_MIN_VIDEO_MB",
   "MAGNET_VIDEO_ONLY",
   "PAN123_TOKEN",
+  "PAN123_PARENT_ID",
   "ENABLE_123"
 ];
 
@@ -1059,18 +1061,35 @@ async function resolvePan123Magnet(token, magnet) {
   );
 }
 
-async function submitPan123Task(token, resourceId, fileIds) {
+async function submitPan123Task(token, resourceId, fileIds, uploadDir) {
+  const body = {
+    resource_list: [{
+      resource_id: resourceId,
+      select_file_id: fileIds
+    }]
+  };
+  if (uploadDir != null) body.upload_dir = uploadDir;
   return pan123Post(
     "/b/api/v2/offline_download/task/submit",
     token,
-    {
-      resource_list: [{
-        resource_id: resourceId,
-        select_file_id: fileIds
-      }]
-    },
+    body,
     30
   );
+}
+
+function resolvePan123UploadDir(cfg) {
+  const raw = resolveVal(cfg.PAN123_PARENT_ID, "");
+  if (!raw || raw === "0") return null;
+  const n = Number(raw);
+  if (!isFinite(n) || n <= 0) return null;
+  return n;
+}
+
+function pan123DirSummary(uploadDir) {
+  if (uploadDir == null) {
+    return "<p>保存目录：默认（未指定 PAN123_PARENT_ID）</p>";
+  }
+  return "<p>保存目录 ID：<code>" + htmlEscape(String(uploadDir)) + "</code></p>";
 }
 
 function pan123FilesToEntries(files) {
@@ -1242,7 +1261,8 @@ function handle123Pan(magnet, cfg, reqUrl) {
           "<p>已解析 " + files.length + " 个文件，提交 " + fileIds.length + " 个。</p>";
       }
 
-      const result = await submitPan123Task(token, taskInfo.id, fileIds);
+      const uploadDir = resolvePan123UploadDir(cfg);
+      const result = await submitPan123Task(token, taskInfo.id, fileIds, uploadDir);
       if (!isPan123Success(result)) {
         throw new Error((result && result.message) || JSON.stringify(result));
       }
@@ -1252,6 +1272,7 @@ function handle123Pan(magnet, cfg, reqUrl) {
           ? filterSummary
           : "<p style=\"font-size:12px;color:#71717a\">脚本版本 " + SCRIPT_VERSION + "</p>" +
             "<p>未启用文件过滤（全量下载）。</p>") +
+        pan123DirSummary(uploadDir) +
         "<p>任务已提交，请打开 123 云盘 App 或网页「离线下载」查看进度。</p>" +
         (backUrl ? "<a class=\"btn btn-secondary\" href=\"" + htmlEscape(backUrl) + "\">返回操作页</a>" : "")));
     } catch (e) {
