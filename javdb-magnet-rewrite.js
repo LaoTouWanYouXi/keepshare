@@ -1,7 +1,8 @@
 /**
  * JavDB 详情页 — http-response
- * @version 1.1.4
+ * @version 1.1.5
  * @changelog
+ *   1.1.5 - 操作弹层增加 123 云盘一键导入按钮
  *   1.1.4 - 拦截 keepshare.org/cc 下载链接；115/PikPak 走本地 /115 /pikpak（去掉 ?action= 防 301）
  *   1.1.3 - 保留 magnet: href，页内弹层
  */
@@ -19,7 +20,7 @@ function decodeArg() {
   return out;
 }
 
-const SCRIPT_VERSION = "1.1.4";
+const SCRIPT_VERSION = "1.1.5";
 
 function resolveMagnetHost(cfg) {
   const candidates = [cfg && cfg.MAGNET_HOST, cfg && cfg.magnet_host];
@@ -42,7 +43,8 @@ const PANEL_CFG = {
   base: "http://" + resolveMagnetHost(cfg),
   s115: resolveVal(cfg.ENABLE_115, "1") !== "0",
   spk: resolveVal(cfg.ENABLE_PIKPAK, "1") !== "0",
-  sgy: resolveVal(cfg.ENABLE_GUANGYA, "1") !== "0"
+  sgy: resolveVal(cfg.ENABLE_GUANGYA, "1") !== "0",
+  s123: resolveVal(cfg.ENABLE_123, "1") !== "0"
 };
 
 function buildHtmlHeaders() {
@@ -101,6 +103,7 @@ function buildInjectScript() {
     "if(C.s115){bs.appendChild(mkBtn(C.base+'/115?magnet='+enc,'115 网盘 · 离线下载','#22c55e','#052e16'));}" +
     "if(C.spk){bs.appendChild(mkBtn(C.base+'/pikpak?magnet='+enc,'PikPak · 一键导入','#3b82f6','#fff'));}" +
     "if(C.sgy){bs.appendChild(mkBtn(C.base+'/guangya?magnet='+enc,'光鸭云盘 · 一键导入','#16a34a','#fff'));}" +
+    "if(C.s123){bs.appendChild(mkBtn(C.base+'/123?magnet='+enc,'123云盘 · 一键导入','#667eea','#fff'));}" +
     "var cl=document.createElement('button');cl.type='button';cl.textContent='关闭';" +
     "cl.style.cssText='display:block;width:100%;margin-top:12px;color:#71717a;font-size:13px;background:0;border:0';" +
     "cl.onclick=function(){w.remove();};" +

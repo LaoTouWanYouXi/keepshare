@@ -1,12 +1,12 @@
 /**
  * Egern / Surge — http-response（备用，主流程见 keepshare-page-intercept.js）
- * @version 1.2.0
+ * @version 1.2.1
  * @changelog
  *   1.2.0 - 主拦截改为 http-request（keepshare-page-intercept.js）
  *   1.1.x - http-response 替换 KeepShare 页
  */
 
-const SCRIPT_VERSION = "1.2.0";
+const SCRIPT_VERSION = "1.2.1";
 
 function decodeArg() {
   const raw = typeof $argument !== "undefined" ? String($argument || "") : "";
@@ -50,6 +50,7 @@ function buildMagnetPage(magnet, cfg) {
   const show115 = resolveVal(cfg.ENABLE_115, "1") !== "0";
   const showPikpak = resolveVal(cfg.ENABLE_PIKPAK, "1") !== "0";
   const showGuangya = resolveVal(cfg.ENABLE_GUANGYA, "1") !== "0";
+  const show123 = resolveVal(cfg.ENABLE_123, "1") !== "0";
 
   let buttons = "";
   if (show115) {
@@ -64,6 +65,10 @@ function buildMagnetPage(magnet, cfg) {
     buttons += "<a class=\"btn btn-green btn-guangya\" href=\"" +
       htmlEscape(base + "/guangya?magnet=" + enc) + "\">光鸭云盘 · 一键导入</a>";
   }
+  if (show123) {
+    buttons += "<a class=\"btn btn-purple\" href=\"" +
+      htmlEscape(base + "/123?magnet=" + enc) + "\">123云盘 · 一键导入</a>";
+  }
 
   return "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">" +
     "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
@@ -74,7 +79,7 @@ function buildMagnetPage(magnet, cfg) {
     "h1{font-size:22px;margin-bottom:8px}.sub{font-size:13px;color:#a1a1aa;margin-bottom:14px}" +
     "textarea{width:100%;height:88px;background:#0f0f14;color:#d4d4d8;border:1px solid #30303a;border-radius:10px;padding:10px;font-size:12px;word-break:break-all;box-sizing:border-box}" +
     ".btn{display:block;width:100%;border-radius:12px;padding:14px;font-size:16px;font-weight:600;margin-top:10px;text-decoration:none;text-align:center}" +
-    ".btn-green{background:#22c55e;color:#052e16}.btn-green.btn-guangya{background:#16a34a;color:#fff}.btn-blue{background:#3b82f6;color:#fff}" +
+    ".btn-green{background:#22c55e;color:#052e16}.btn-green.btn-guangya{background:#16a34a;color:#fff}.btn-blue{background:#3b82f6;color:#fff}.btn-purple{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff}" +
     ".hint{font-size:12px;color:#71717a;text-align:center;margin-top:12px}</style></head><body>" +
     "<div class=\"card\"><h1>检测到磁力链接</h1>" +
     "<p class=\"sub\">长按下方文本可复制磁力链接。</p>" +

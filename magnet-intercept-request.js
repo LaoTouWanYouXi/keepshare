@@ -1,7 +1,8 @@
 /**
  * Egern / Surge — http-request
- * @version 1.3.5
+ * @version 1.3.8
  * @changelog
+ *   1.3.8 - 新增 123 云盘一键导入（resolve + submit 离线下载 API）
  *   1.3.7 - 修复文件解析阶段丢失文件的问题：为没有 index 的文件自动分配唯一索引；改进去重逻辑
  *   1.3.6 - 修复 videoOnly 模式下非视频文件判断错误；改进视频文件保留策略（保留多个大体积视频）；增强文件解析兼容性
  *   1.3.5 - 不再丢弃无文件名的正片；多视频时只保留最大正片；补充直播/社區类广告规则
@@ -20,7 +21,9 @@ const SITE_ORIGIN = "https://www.guangyapan.com";
 const UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
 
-const SCRIPT_VERSION = "1.3.7";
+const SCRIPT_VERSION = "1.3.8";
+
+const PAN123_API = "https://www.123pan.com";
 
 const POSITIONAL_ARG_KEYS = [
   "GUANGYA_REFRESH_TOKEN",
@@ -33,7 +36,9 @@ const POSITIONAL_ARG_KEYS = [
   "MAGNET_FILTER",
   "MAGNET_BLOCK_PATTERNS",
   "MAGNET_MIN_VIDEO_MB",
-  "MAGNET_VIDEO_ONLY"
+  "MAGNET_VIDEO_ONLY",
+  "PAN123_TOKEN",
+  "ENABLE_123"
 ];
 
 const VIDEO_EXTS = {
@@ -49,6 +54,10 @@ const DEFAULT_BLOCK_PATTERN_SOURCES = [
 const TOKEN_KEYS = [
   "GUANGYA_REFRESH_TOKEN", "guangya_refresh_token", "guangyaRefreshToken",
   "refresh_token", "REFRESH_TOKEN", "TOKEN", "token"
+];
+
+const PAN123_TOKEN_KEYS = [
+  "PAN123_TOKEN", "pan123_token", "pan123Token", "123_TOKEN", "123_token"
 ];
 
 function isPlaceholder(s) {
@@ -148,6 +157,22 @@ function getRefreshToken(cfg, argRaw) {
   return scanGyToken(argRaw) || scanGyToken(JSON.stringify(readCtxEnv() || {}));
 }
 
+function scanPan123Token(text) {
+  const m = String(text || "").match(/eyJ[A-Za-z0-9_\-\.~+/=]{20,}/);
+  return m ? m[0] : "";
+}
+
+function getPan123Token(cfg, argRaw) {
+  const ctxEnv = readCtxEnv();
+  const fromKeys = pickFirstValid(
+    PAN123_TOKEN_KEYS.map(function (k) { return cfg && cfg[k]; }).concat(
+      ctxEnv ? PAN123_TOKEN_KEYS.map(function (k) { return ctxEnv[k]; }) : []
+    )
+  );
+  if (fromKeys) return fromKeys;
+  return scanPan123Token(argRaw) || scanPan123Token(JSON.stringify(readCtxEnv() || {}));
+}
+
 function loadConfig() {
   const out = {};
   const argRaw = typeof $argument !== "undefined" ? String($argument || "") : "";
@@ -157,6 +182,8 @@ function loadConfig() {
   mergeObject(out, readCtxEnv());
   const token = getRefreshToken(out, argRaw);
   if (token) out.GUANGYA_REFRESH_TOKEN = token;
+  const pan123 = getPan123Token(out, argRaw);
+  if (pan123) out.PAN123_TOKEN = pan123;
   return out;
 }
 
@@ -227,6 +254,7 @@ function buildMagnetPage(magnet, cfg) {
   const show115 = resolveVal(cfg.ENABLE_115, "1") !== "0";
   const showPikpak = resolveVal(cfg.ENABLE_PIKPAK, "1") !== "0";
   const showGuangya = resolveVal(cfg.ENABLE_GUANGYA, "1") !== "0";
+  const show123 = resolveVal(cfg.ENABLE_123, "1") !== "0";
   const ks = parseKeepShareTemplate(cfg);
 
   let buttons = "";
@@ -244,6 +272,10 @@ function buildMagnetPage(magnet, cfg) {
     buttons += "<a class=\"btn btn-green btn-guangya\" href=\"" +
       htmlEscape(base + "/guangya?magnet=" + enc) + "\">光鸭云盘 · 一键导入</a>";
   }
+  if (show123) {
+    buttons += "<a class=\"btn btn-purple\" href=\"" +
+      htmlEscape(base + "/123?magnet=" + enc) + "\">123云盘 · 一键导入</a>";
+  }
 
   return "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">" +
     "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\">" +
@@ -255,11 +287,11 @@ function buildMagnetPage(magnet, cfg) {
     "textarea{width:100%;height:88px;background:#0f0f14;color:#d4d4d8;border:1px solid #30303a;border-radius:10px;padding:10px;font-size:12px;word-break:break-all}" +
     ".btn{display:block;width:100%;border-radius:12px;padding:14px;font-size:16px;font-weight:600;margin-top:10px;text-decoration:none;text-align:center}" +
     ".btn-green{background:#22c55e;color:#052e16}.btn-green.btn-guangya{background:#16a34a;color:#fff}" +
-    ".btn-blue{background:#3b82f6;color:#fff}" +
+    ".btn-blue{background:#3b82f6;color:#fff}.btn-purple{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff}" +
     ".hint{font-size:12px;color:#71717a;text-align:center;margin-top:12px}" +
     "</style></head><body><div class=\"card\">" +
     "<h1>检测到磁力链接</h1>" +
-    "<p class=\"sub\">长按下方文本可复制。115 / PikPak 为外链，光鸭走本地脚本。</p>" +
+    "<p class=\"sub\">长按下方文本可复制。115 / PikPak 为外链，光鸭 / 123 走本地脚本。</p>" +
     "<textarea readonly>" + htmlEscape(magnet) + "</textarea>" + buttons +
     "<p class=\"hint\"><a href=\"javascript:history.back()\" style=\"color:#71717a\">返回上一页</a></p>" +
     "</div></body></html>";
@@ -819,6 +851,138 @@ async function createGuangyaTask(token, did, magnet, parentId, fileIndexes) {
   );
 }
 
+function pan123Headers(token) {
+  return {
+    accept: "application/json, text/plain, */*",
+    authorization: "Bearer " + token,
+    "App-Version": "3",
+    platform: "web",
+    "content-type": "application/json;charset=UTF-8",
+    origin: PAN123_API,
+    referer: PAN123_API + "/",
+    "user-agent": UA
+  };
+}
+
+function isPan123Success(result) {
+  return !!(result && result.code === 0);
+}
+
+async function resolvePan123Magnet(token, magnet) {
+  return httpPost(
+    PAN123_API + "/b/api/v2/offline_download/task/resolve",
+    pan123Headers(token),
+    { urls: magnet },
+    45
+  );
+}
+
+async function submitPan123Task(token, resourceId, fileIds) {
+  return httpPost(
+    PAN123_API + "/b/api/v2/offline_download/task/submit",
+    pan123Headers(token),
+    {
+      resource_list: [{
+        resource_id: resourceId,
+        select_file_id: fileIds
+      }]
+    },
+    30
+  );
+}
+
+function pan123FilesToEntries(files) {
+  return (files || []).map(function (file, index) {
+    return {
+      index: index,
+      name: chooseBestNameCandidate([
+        file && file.name,
+        file && file.fileName,
+        file && file.file_name,
+        file && file.filename
+      ]),
+      size: Number((file && (file.size || file.fileSize)) || 0),
+      raw: file
+    };
+  });
+}
+
+function pickPan123FileIds(files, cfg) {
+  if (!files || !files.length) return [];
+  if (!isMagnetFilterEnabled(cfg)) {
+    return files.map(function (file) { return file.id; }).filter(Boolean);
+  }
+  const filtered = filterResolvedMagnetFiles(pan123FilesToEntries(files), cfg);
+  if (!filtered.kept.length) return [];
+  return filtered.kept.map(function (entry) {
+    return entry.raw && entry.raw.id;
+  }).filter(Boolean);
+}
+
+function handle123Pan(magnet, cfg) {
+  const argRaw = typeof $argument !== "undefined" ? String($argument || "") : "";
+  const token = getPan123Token(cfg, argRaw);
+
+  if (!token) {
+    respondLocal(200, {}, htmlPage("未配置 Token", "<h1>未配置 123 云盘 Token</h1>" +
+      "<p>请在 Egern 模块参数填写 <code>PAN123_TOKEN</code>（123 官网 Local Storage 的 authorToken）。</p>" +
+      "<p style=\"word-break:break-all;font-size:12px\">" + htmlEscape(magnet) + "</p>" +
+      "<a class=\"btn\" href=\"javascript:history.back()\">返回</a>"));
+    return;
+  }
+
+  (async function () {
+    try {
+      const filterEnabled = isMagnetFilterEnabled(cfg);
+      let filterSummary = "";
+
+      const resolved = await resolvePan123Magnet(token, magnet);
+      if (!isPan123Success(resolved)) {
+        throw new Error((resolved && resolved.message) || "解析磁力文件列表失败");
+      }
+
+      const taskInfo = resolved.data && resolved.data.list && resolved.data.list[0];
+      if (!taskInfo) throw new Error("未获取到解析结果");
+      if (taskInfo.err_code !== 0) {
+        throw new Error("解析失败 (err_code=" + taskInfo.err_code + ")");
+      }
+
+      const files = taskInfo.files || [];
+      if (!files.length) throw new Error("未找到可下载文件");
+
+      const fileIds = pickPan123FileIds(files, cfg);
+      if (!fileIds.length) {
+        respondLocal(200, {}, htmlPage("全部被过滤", "<h1>没有可下载的文件</h1>" +
+          "<p>共解析 " + files.length + " 个文件，均被拦截规则命中。</p>" +
+          "<a class=\"btn\" href=\"javascript:history.back()\">返回</a>"));
+        return;
+      }
+
+      if (filterEnabled) {
+        filterSummary = "<p style=\"font-size:12px;color:#71717a\">脚本版本 " + SCRIPT_VERSION + "</p>" +
+          "<p>已解析 " + files.length + " 个文件，提交 " + fileIds.length + " 个。</p>";
+      }
+
+      const result = await submitPan123Task(token, taskInfo.id, fileIds);
+      if (!isPan123Success(result)) {
+        throw new Error((result && result.message) || JSON.stringify(result));
+      }
+
+      respondLocal(200, {}, htmlPage("导入成功", "<h1>已提交 123 云盘离线下载</h1>" +
+        (filterEnabled
+          ? filterSummary
+          : "<p style=\"font-size:12px;color:#71717a\">脚本版本 " + SCRIPT_VERSION + "</p>" +
+            "<p>未启用文件过滤（全量下载）。</p>") +
+        "<p>任务已提交，请打开 123 云盘 App 或网页「离线下载」查看进度。</p>" +
+        "<a class=\"btn\" href=\"javascript:history.back()\">返回上一页</a>"));
+    } catch (e) {
+      respondLocal(200, {}, htmlPage("请求失败", "<h1>调用 123 云盘 API 失败</h1><p>" +
+        htmlEscape(e.message || e) + "</p>" +
+        "<a class=\"btn\" href=\"javascript:history.back()\">返回</a>"));
+    }
+  })();
+}
+
 function parseKeepShareTemplate(cfg) {
   const raw = resolveVal(cfg.KEEPSHARE_TEMPLATE || cfg.KEEPSHARE_SHARE_ID, "");
   if (!raw) return null;
@@ -967,6 +1131,13 @@ if (req.host !== host) {
         "<a class=\"btn\" href=\"javascript:history.back()\">返回</a>"));
     }
   })();
+} else if (req.path === "/123") {
+  const magnet = req.magnet;
+  if (!magnet || magnet.indexOf("magnet:") !== 0) {
+    respondLocal(400, {}, htmlPage("参数错误", "<h1>缺少有效磁力链接</h1>"));
+    return;
+  }
+  handle123Pan(magnet, cfg);
 } else {
   $done({});
 }
